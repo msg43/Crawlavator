@@ -378,11 +378,8 @@ def download_worker(session_id, item_ids, options, site_id):
                 
                 safe_title = _safe_filename(item.title)
                 
-                # Create output directory
-                if item.asset_type in ['video', 'article']:
-                    output_dir = os.path.join(category_dir, safe_title)
-                else:
-                    output_dir = category_dir
+                # Create output directory - each item gets its own folder
+                output_dir = os.path.join(category_dir, safe_title)
                 os.makedirs(output_dir, exist_ok=True)
                 
                 # Start tracking
