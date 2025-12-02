@@ -3,46 +3,72 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crawlavator - Eurodollar University Downloader</title>
+    <title>Crawlavator - Multi-Site Batch Downloader</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="container">
         <header>
             <h1>Crawlavator</h1>
-            <p class="subtitle">Download your Eurodollar University content</p>
+            <p class="subtitle">Multi-Site Batch Downloader</p>
+            
+            <!-- Site Selector -->
+            <div class="site-selector">
+                <label for="site-select">Site:</label>
+                <select id="site-select">
+                    <option value="eurodollar">Eurodollar University</option>
+                    <option value="lexfridman">Lex Fridman Podcast</option>
+                </select>
+            </div>
         </header>
 
         <!-- Configuration Section -->
         <section class="config-section card" id="config-section">
             <h2>Configuration</h2>
             
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="email">Email</label>
-                    <input type="email" id="email" placeholder="your@email.com">
-                </div>
-                <div class="form-group">
-                    <label for="password">Password</label>
-                    <input type="password" id="password" placeholder="Your password">
+            <!-- Auth fields (shown for sites requiring auth) -->
+            <div id="auth-fields">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="email">Email</label>
+                        <input type="email" id="email" placeholder="your@email.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" placeholder="Your password">
+                    </div>
                 </div>
             </div>
 
             <div class="form-group">
                 <label for="download-dir">Download Directory</label>
                 <div class="input-with-button">
-                    <input type="text" id="download-dir" placeholder="~/Downloads/eurodollar">
+                    <input type="text" id="download-dir" placeholder="~/Downloads/crawlavator">
                     <button class="btn btn-small" id="reset-dir-btn" type="button">Reset</button>
                 </div>
                 <small>Where to save downloaded files. Leave empty for default (<code>./downloads</code>)</small>
             </div>
+            
+            <!-- knowledge_chipper Export -->
+            <div class="form-group kc-export-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="export-to-kc">
+                    <span>Export to knowledge_chipper</span>
+                </label>
+                <div id="kc-dir-wrapper" style="display: none;">
+                    <label for="kc-dir">knowledge_chipper Input Path</label>
+                    <input type="text" id="kc-dir" placeholder="~/Projects/knowledge_chipper/input">
+                    <small>Transcripts will be saved as miner-compatible JSON segments</small>
+                </div>
+            </div>
 
             <div class="button-group">
                 <button class="btn btn-primary" id="save-config-btn">Save Configuration</button>
-                <button class="btn btn-secondary" id="login-btn" disabled>Login</button>
+                <button class="btn btn-secondary" id="login-btn" style="display: none;">Login</button>
             </div>
             
-            <div class="auth-section">
+            <!-- Auth Section (shown for sites requiring auth) -->
+            <div class="auth-section" id="auth-section" style="display: none;">
                 <div class="auth-divider">
                     <span>Authentication Status</span>
                 </div>
@@ -68,21 +94,10 @@
             <div id="index-status" class="status-message"></div>
             
             <!-- Category Filters -->
-            <div class="filter-section">
+            <div class="filter-section" id="category-filter-section">
                 <span class="filter-label">Category:</span>
                 <div class="filter-group" id="category-filters">
-                    <label class="filter-item">
-                        <input type="checkbox" data-category="membership" checked>
-                        <span>Membership</span>
-                    </label>
-                    <label class="filter-item">
-                        <input type="checkbox" data-category="dda" checked>
-                        <span>Deep Dive Analysis</span>
-                    </label>
-                    <label class="filter-item">
-                        <input type="checkbox" data-category="daily-briefing" checked>
-                        <span>Daily Briefing</span>
-                    </label>
+                    <!-- Will be populated based on site -->
                 </div>
             </div>
             
@@ -90,26 +105,7 @@
             <div class="filter-section">
                 <span class="filter-label">Type:</span>
                 <div class="filter-group" id="type-filters">
-                    <label class="filter-item">
-                        <input type="checkbox" data-type="video" checked>
-                        <span>🎥 Videos</span>
-                    </label>
-                    <label class="filter-item">
-                        <input type="checkbox" data-type="article" checked>
-                        <span>📝 Articles</span>
-                    </label>
-                    <label class="filter-item">
-                        <input type="checkbox" data-type="pdf" checked>
-                        <span>📄 PDFs</span>
-                    </label>
-                    <label class="filter-item">
-                        <input type="checkbox" data-type="audio" checked>
-                        <span>🎧 Audio</span>
-                    </label>
-                    <label class="filter-item">
-                        <input type="checkbox" data-type="transcript" checked>
-                        <span>📋 Transcripts</span>
-                    </label>
+                    <!-- Will be populated based on site -->
                 </div>
             </div>
 
@@ -165,4 +161,3 @@
     <script src="/static/app.js"></script>
 </body>
 </html>
-

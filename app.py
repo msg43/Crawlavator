@@ -1,6 +1,6 @@
 """
-Crawlavator - Eurodollar University Batch Downloader
-A web app to batch download content from eurodollar.university
+Crawlavator - Multi-Site Batch Downloader
+A web app to batch download content from various websites
 """
 
 import os
@@ -10,12 +10,10 @@ import queue
 import threading
 from flask import Flask, render_template, request, jsonify, Response
 
-from edu_auth import EDUAuth
-from edu_scraper import EDUScraper
-from download_manager import DownloadManager
-from video_extractor import VideoExtractor
-from article_downloader import ArticleDownloader
-from pdf_downloader import PDFDownloader
+# Import site plugins - this registers them
+from sites import list_sites, get_site, ContentItem
+from sites.eurodollar import EurodollarSite
+from shared import DownloadManager
 
 app = Flask(__name__)
 
@@ -24,27 +22,46 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 DEFAULT_DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
 
 # Delays between operations
-DOWNLOAD_DELAY = 1  # seconds between items
-VIDEO_DOWNLOAD_DELAY = 3  # extra seconds after video downloads
+DOWNLOAD_DELAY = 1
+VIDEO_DOWNLOAD_DELAY = 3
 
 # Global state
 progress_queues = {}
 indexed_content = {}
-auth_instance = None
+site_instances = {}
 
 
-def get_downloads_dir():
-    """Get the configured downloads directory"""
+def get_downloads_dir(site_id: str = None):
+    """Get the configured downloads directory for a site"""
     cfg = load_config()
-    download_dir = cfg.get('download_dir', '').strip().strip("'\"")
+    sites_cfg = cfg.get('sites', {})
     
-    if download_dir:
-        download_dir = os.path.expanduser(download_dir)
-        if not os.path.isabs(download_dir):
-            download_dir = os.path.abspath(download_dir)
-        return download_dir
+    if site_id and site_id in sites_cfg:
+        download_dir = sites_cfg[site_id].get('download_dir', '').strip().strip("'\"")
+        if download_dir:
+            download_dir = os.path.expanduser(download_dir)
+            if not os.path.isabs(download_dir):
+                download_dir = os.path.abspath(download_dir)
+            return download_dir
     
     return DEFAULT_DOWNLOADS_DIR
+
+
+def get_kc_dir(site_id: str = None):
+    """Get the knowledge_chipper directory for a site"""
+    cfg = load_config()
+    sites_cfg = cfg.get('sites', {})
+    
+    if site_id and site_id in sites_cfg:
+        site_cfg = sites_cfg[site_id]
+        if site_cfg.get('export_to_kc'):
+            kc_dir = site_cfg.get('knowledge_chipper_dir', '').strip().strip("'\"")
+            if kc_dir:
+                kc_dir = os.path.expanduser(kc_dir)
+                if not os.path.isabs(kc_dir):
+                    kc_dir = os.path.abspath(kc_dir)
+                return kc_dir
+    return None
 
 
 def load_config():
@@ -55,7 +72,7 @@ def load_config():
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             pass
-    return {}
+    return {'sites': {}, 'active_site': 'eurodollar'}
 
 
 def save_config(config):
@@ -64,12 +81,13 @@ def save_config(config):
         json.dump(config, f, indent=2)
 
 
-def get_auth() -> EDUAuth:
-    """Get or create auth instance"""
-    global auth_instance
-    if not auth_instance:
-        auth_instance = EDUAuth()
-    return auth_instance
+def get_site_instance(site_id: str):
+    """Get or create a site instance"""
+    if site_id not in site_instances:
+        site_class = get_site(site_id)
+        if site_class:
+            site_instances[site_id] = site_class()
+    return site_instances.get(site_id)
 
 
 @app.route('/')
@@ -78,30 +96,63 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/api/sites')
+def get_sites():
+    """Get list of available sites"""
+    return jsonify(list_sites())
+
+
 @app.route('/api/config', methods=['GET', 'POST'])
 def config():
     """Get or save configuration"""
     if request.method == 'GET':
         cfg = load_config()
-        # Mask password
-        if cfg.get('password'):
-            cfg['password'] = '••••••••'
-        # Check auth status
-        auth = get_auth()
-        is_auth, _ = auth.check_auth_status()
-        cfg['authenticated'] = is_auth
+        
+        # Mask passwords in site configs
+        for site_id, site_cfg in cfg.get('sites', {}).items():
+            if site_cfg.get('password'):
+                site_cfg['password'] = '••••••••'
+        
+        # Check auth status for active site
+        active_site_id = cfg.get('active_site', 'eurodollar')
+        site = get_site_instance(active_site_id)
+        
+        if site and site.REQUIRES_AUTH:
+            is_auth, msg = site.check_auth()
+            cfg['authenticated'] = is_auth
+            cfg['auth_message'] = msg
+        else:
+            cfg['authenticated'] = True
+            cfg['auth_message'] = 'No authentication required'
+        
         return jsonify(cfg)
     
     elif request.method == 'POST':
         data = request.json
         cfg = load_config()
         
-        if 'email' in data:
-            cfg['email'] = data['email']
+        # Update active site
+        if 'active_site' in data:
+            cfg['active_site'] = data['active_site']
+        
+        # Update site-specific config
+        site_id = data.get('site_id') or cfg.get('active_site', 'eurodollar')
+        
+        if 'sites' not in cfg:
+            cfg['sites'] = {}
+        if site_id not in cfg['sites']:
+            cfg['sites'][site_id] = {}
+        
+        site_cfg = cfg['sites'][site_id]
+        
+        # Update fields
+        for key in ['email', 'download_dir', 'knowledge_chipper_dir', 'export_to_kc']:
+            if key in data:
+                site_cfg[key] = data[key]
+        
+        # Only update password if not masked
         if 'password' in data and data['password'] != '••••••••':
-            cfg['password'] = data['password']
-        if 'download_dir' in data:
-            cfg['download_dir'] = data['download_dir']
+            site_cfg['password'] = data['password']
         
         save_config(cfg)
         return jsonify({'success': True})
@@ -109,17 +160,26 @@ def config():
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    """Login to eurodollar.university"""
+    """Login to the active site"""
     cfg = load_config()
-    email = cfg.get('email', '')
-    password = cfg.get('password', '')
+    active_site_id = cfg.get('active_site', 'eurodollar')
+    site_cfg = cfg.get('sites', {}).get(active_site_id, {})
+    
+    site = get_site_instance(active_site_id)
+    if not site:
+        return jsonify({'success': False, 'error': 'Site not found'}), 400
+    
+    if not site.REQUIRES_AUTH:
+        return jsonify({'success': True, 'message': 'No authentication required'})
+    
+    email = site_cfg.get('email', '')
+    password = site_cfg.get('password', '')
     
     if not email or not password:
         return jsonify({'success': False, 'error': 'Email and password required'}), 400
     
     try:
-        auth = get_auth()
-        success, message = auth.login(email, password, headless=False)
+        success, message = site.login(email=email, password=password)
         
         if success:
             return jsonify({'success': True, 'message': message})
@@ -132,9 +192,18 @@ def login():
 @app.route('/api/login-interactive', methods=['POST'])
 def login_interactive():
     """Open browser for manual login"""
+    cfg = load_config()
+    active_site_id = cfg.get('active_site', 'eurodollar')
+    
+    site = get_site_instance(active_site_id)
+    if not site:
+        return jsonify({'success': False, 'error': 'Site not found'}), 400
+    
+    if not site.REQUIRES_AUTH:
+        return jsonify({'success': True, 'message': 'No authentication required'})
+    
     try:
-        auth = get_auth()
-        success, message = auth.login_interactive()
+        success, message = site.login(interactive=True)
         
         if success:
             return jsonify({'success': True, 'message': message})
@@ -147,8 +216,17 @@ def login_interactive():
 @app.route('/api/check-auth')
 def check_auth():
     """Check current authentication status"""
-    auth = get_auth()
-    is_auth, message = auth.check_auth_status()
+    cfg = load_config()
+    active_site_id = cfg.get('active_site', 'eurodollar')
+    
+    site = get_site_instance(active_site_id)
+    if not site:
+        return jsonify({'authenticated': False, 'message': 'Site not found'})
+    
+    if not site.REQUIRES_AUTH:
+        return jsonify({'authenticated': True, 'message': 'No authentication required'})
+    
+    is_auth, message = site.check_auth()
     return jsonify({
         'authenticated': is_auth,
         'message': message
@@ -157,21 +235,31 @@ def check_auth():
 
 @app.route('/api/index-content', methods=['POST'])
 def index_content():
-    """Index all available content"""
+    """Index all available content for the active site"""
     global indexed_content
     
-    auth = get_auth()
-    is_auth, msg = auth.check_auth_status()
+    cfg = load_config()
+    active_site_id = cfg.get('active_site', 'eurodollar')
     
-    if not is_auth:
-        return jsonify({'error': f'Not authenticated: {msg}'}), 401
+    site = get_site_instance(active_site_id)
+    if not site:
+        return jsonify({'error': 'Site not found'}), 400
+    
+    if site.REQUIRES_AUTH:
+        is_auth, msg = site.check_auth()
+        if not is_auth:
+            return jsonify({'error': f'Not authenticated: {msg}'}), 401
     
     try:
-        scraper = EDUScraper(auth)
-        results = scraper.index_all()
+        items = site.index_content()
         
-        indexed_content = {item.id: item.to_dict() for item in scraper.get_all_items()}
-        summary = scraper.get_summary()
+        # Store indexed content
+        indexed_content = {item.id: item.to_dict() for item in items}
+        
+        # Get summary if available
+        summary = {}
+        if hasattr(site, 'get_summary'):
+            summary = site.get_summary()
         
         return jsonify({
             'success': True,
@@ -200,11 +288,17 @@ def start_download():
     if not item_ids:
         return jsonify({'error': 'No items selected'}), 400
     
-    auth = get_auth()
-    is_auth, msg = auth.check_auth_status()
+    cfg = load_config()
+    active_site_id = cfg.get('active_site', 'eurodollar')
     
-    if not is_auth:
-        return jsonify({'error': f'Not authenticated: {msg}'}), 401
+    site = get_site_instance(active_site_id)
+    if not site:
+        return jsonify({'error': 'Site not found'}), 400
+    
+    if site.REQUIRES_AUTH:
+        is_auth, msg = site.check_auth()
+        if not is_auth:
+            return jsonify({'error': f'Not authenticated: {msg}'}), 401
     
     # Create session ID
     import uuid
@@ -214,7 +308,7 @@ def start_download():
     # Start download in background
     thread = threading.Thread(
         target=download_worker,
-        args=(session_id, item_ids, options, auth)
+        args=(session_id, item_ids, options, active_site_id)
     )
     thread.daemon = True
     thread.start()
@@ -222,20 +316,27 @@ def start_download():
     return jsonify({'session_id': session_id})
 
 
-def download_worker(session_id, item_ids, options, auth):
+def download_worker(session_id, item_ids, options, site_id):
     """Background worker for downloads"""
     q = progress_queues.get(session_id)
     if not q:
         return
     
+    site = get_site_instance(site_id)
+    if not site:
+        q.put({'type': 'error', 'message': 'Site not found'})
+        return
+    
     try:
-        downloads_dir = get_downloads_dir()
+        downloads_dir = get_downloads_dir(site_id)
         os.makedirs(downloads_dir, exist_ok=True)
         
         dm = DownloadManager(downloads_dir)
-        video_extractor = VideoExtractor(auth)
-        article_dl = ArticleDownloader(auth)
-        pdf_dl = PDFDownloader(auth)
+        
+        # Check for knowledge_chipper export
+        kc_dir = get_kc_dir(site_id)
+        if kc_dir:
+            os.makedirs(kc_dir, exist_ok=True)
         
         total = len(item_ids)
         completed = 0
@@ -244,11 +345,14 @@ def download_worker(session_id, item_ids, options, auth):
         
         for i, item_id in enumerate(item_ids):
             try:
-                item = indexed_content.get(item_id)
-                if not item:
+                item_dict = indexed_content.get(item_id)
+                if not item_dict:
                     q.put({'type': 'warning', 'message': f'Item not found: {item_id}'})
                     failed += 1
                     continue
+                
+                # Convert dict back to ContentItem
+                item = ContentItem(**item_dict)
                 
                 # Progress update
                 progress = ((i + 1) / total) * 100
@@ -257,132 +361,59 @@ def download_worker(session_id, item_ids, options, auth):
                     'current': i + 1,
                     'total': total,
                     'percent': progress,
-                    'message': f'[{i+1}/{total}] {item["title"][:40]}...'
+                    'message': f'[{i+1}/{total}] {item.title[:40]}...'
                 })
                 
                 # Check if should download
                 if not dm.should_download(item_id):
-                    q.put({'type': 'status', 'message': f'Skipping (already complete): {item["title"][:40]}'})
+                    q.put({'type': 'status', 'message': f'Skipping (already complete): {item.title[:40]}'})
                     skipped += 1
                     continue
                 
                 # Determine output path
-                category_dir = os.path.join(downloads_dir, item['category'])
-                if item.get('subcategory'):
-                    category_dir = os.path.join(category_dir, item['subcategory'])
+                category_dir = os.path.join(downloads_dir, item.category)
+                if item.subcategory:
+                    category_dir = os.path.join(category_dir, item.subcategory)
                 
-                safe_title = _safe_filename(item['title'])
+                safe_title = _safe_filename(item.title)
                 
-                # Download based on type
-                asset_type = item['asset_type']
-                success = False
-                message = ""
-                
-                if asset_type == 'video' and options.get('videos', True):
+                # Create output directory
+                if item.asset_type in ['video', 'article']:
                     output_dir = os.path.join(category_dir, safe_title)
-                    os.makedirs(output_dir, exist_ok=True)
-                    output_path = os.path.join(output_dir, 'video.mp4')
-                    
-                    dm.start_download(item_id, item['title'], item['url'], asset_type, item['category'], output_path)
-                    
-                    def video_progress(bytes_dl):
-                        mb = bytes_dl // 1_000_000
-                        if mb % 5 == 0:  # Report every 5MB
-                            q.put({'type': 'status', 'message': f'Downloading video: {mb}MB...'})
-                    
-                    success, message = video_extractor.download_video(
-                        item['url'], output_path, progress_callback=video_progress
-                    )
-                    
-                    if success:
-                        size = os.path.getsize(output_path)
-                        dm.complete_download(item_id, output_path, size)
-                    else:
-                        dm.fail_download(item_id, message)
-                    
-                    time.sleep(VIDEO_DOWNLOAD_DELAY)
-                
-                elif asset_type == 'article' and options.get('articles', True):
-                    output_dir = os.path.join(category_dir, safe_title)
-                    dm.start_download(item_id, item['title'], item['url'], asset_type, item['category'], output_dir)
-                    
-                    success, message = article_dl.download_article(item['url'], output_dir)
-                    
-                    if success:
-                        html_path = os.path.join(output_dir, 'article.html')
-                        size = os.path.getsize(html_path) if os.path.exists(html_path) else 0
-                        dm.complete_download(item_id, output_dir, size)
-                    else:
-                        if 'Access denied' in message or '403' in message:
-                            dm.mark_restricted(item_id, item['title'], item['url'], message)
-                        else:
-                            dm.fail_download(item_id, message)
-                
-                elif asset_type == 'pdf' and options.get('pdfs', True):
-                    output_path = os.path.join(category_dir, f"{safe_title}.pdf")
-                    
-                    if item.get('download_url'):
-                        dm.start_download(item_id, item['title'], item['url'], asset_type, item['category'], output_path)
-                        success, message = pdf_dl.download_file(item['download_url'], output_path)
-                    else:
-                        dm.start_download(item_id, item['title'], item['url'], asset_type, item['category'], output_path)
-                        success, message = pdf_dl.download_daily_briefing(item['url'], item['title'], category_dir)
-                    
-                    if success:
-                        size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-                        dm.complete_download(item_id, output_path, size)
-                    else:
-                        if 'Access denied' in message or '403' in message:
-                            dm.mark_restricted(item_id, item['title'], item['url'], message)
-                        else:
-                            dm.fail_download(item_id, message)
-                
-                elif asset_type == 'audio' and options.get('audio', True):
-                    ext = '.m4a'
-                    if item.get('download_url'):
-                        for e in ['.m4a', '.mp3', '.wav']:
-                            if e in item['download_url'].lower():
-                                ext = e
-                                break
-                    
-                    output_path = os.path.join(category_dir, f"{safe_title}{ext}")
-                    
-                    if item.get('download_url'):
-                        dm.start_download(item_id, item['title'], item['url'], asset_type, item['category'], output_path)
-                        success, message = pdf_dl.download_file(item['download_url'], output_path)
-                    else:
-                        skipped += 1
-                        continue
-                    
-                    if success:
-                        size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-                        dm.complete_download(item_id, output_path, size)
-                    else:
-                        dm.fail_download(item_id, message)
-                
-                elif asset_type == 'transcript' and options.get('transcripts', True):
-                    output_dir = os.path.join(category_dir, 'transcripts')
-                    dm.start_download(item_id, item['title'], item['url'], asset_type, item['category'], output_dir)
-                    
-                    success, message = article_dl.download_transcript(item['url'], item['title'], output_dir)
-                    
-                    if success:
-                        dm.complete_download(item_id, output_dir, 0)
-                    else:
-                        dm.fail_download(item_id, message)
-                
                 else:
-                    skipped += 1
-                    continue
+                    output_dir = category_dir
+                os.makedirs(output_dir, exist_ok=True)
+                
+                # Start tracking
+                dm.start_download(item_id, item.title, item.url, item.asset_type, item.category, output_dir)
+                
+                # Download
+                success, message = site.download_item(item, output_dir)
                 
                 if success:
+                    dm.complete_download(item_id, output_dir, 0)
                     completed += 1
-                    q.put({'type': 'status', 'message': f'✓ {item["title"][:40]}: {message}'})
+                    q.put({'type': 'status', 'message': f'✓ {item.title[:40]}: {message}'})
+                    
+                    # Export to knowledge_chipper if enabled
+                    if kc_dir and item.asset_type == 'transcript':
+                        try:
+                            export_to_knowledge_chipper(item, output_dir, kc_dir)
+                        except Exception as e:
+                            q.put({'type': 'warning', 'message': f'KC export failed: {str(e)}'})
                 else:
+                    if 'Access denied' in message or '403' in message:
+                        dm.mark_restricted(item_id, item.title, item.url, message)
+                    else:
+                        dm.fail_download(item_id, message)
                     failed += 1
-                    q.put({'type': 'warning', 'message': f'✗ {item["title"][:40]}: {message}'})
+                    q.put({'type': 'warning', 'message': f'✗ {item.title[:40]}: {message}'})
                 
-                time.sleep(DOWNLOAD_DELAY)
+                # Delay between downloads
+                if item.asset_type == 'video':
+                    time.sleep(VIDEO_DOWNLOAD_DELAY)
+                else:
+                    time.sleep(DOWNLOAD_DELAY)
                 
             except Exception as e:
                 failed += 1
@@ -409,6 +440,12 @@ def download_worker(session_id, item_ids, options, auth):
         time.sleep(2)
         if session_id in progress_queues:
             del progress_queues[session_id]
+
+
+def export_to_knowledge_chipper(item: ContentItem, source_dir: str, kc_dir: str):
+    """Export transcript to knowledge_chipper format"""
+    # This will be implemented when we add transcript parsing
+    pass
 
 
 def _safe_filename(name: str) -> str:
@@ -447,10 +484,9 @@ if __name__ == '__main__':
     os.makedirs(DEFAULT_DOWNLOADS_DIR, exist_ok=True)
     
     print("\n" + "="*50)
-    print("Crawlavator - Eurodollar University Downloader")
+    print("Crawlavator - Multi-Site Batch Downloader")
     print("="*50)
     print(f"Open http://localhost:5001 in your browser")
     print("="*50 + "\n")
     
     app.run(debug=True, port=5001, threaded=True)
-

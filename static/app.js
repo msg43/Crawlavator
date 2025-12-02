@@ -1,16 +1,24 @@
 /**
- * Crawlavator - Eurodollar University Downloader Frontend
+ * Crawlavator - Multi-Site Batch Downloader Frontend
  */
 
 // DOM Elements
 const elements = {
+    // Site selector
+    siteSelect: document.getElementById('site-select'),
+    
     // Config
+    authFields: document.getElementById('auth-fields'),
     emailInput: document.getElementById('email'),
     passwordInput: document.getElementById('password'),
     downloadDirInput: document.getElementById('download-dir'),
     resetDirBtn: document.getElementById('reset-dir-btn'),
+    exportToKcCheckbox: document.getElementById('export-to-kc'),
+    kcDirWrapper: document.getElementById('kc-dir-wrapper'),
+    kcDirInput: document.getElementById('kc-dir'),
     saveConfigBtn: document.getElementById('save-config-btn'),
     loginBtn: document.getElementById('login-btn'),
+    authSection: document.getElementById('auth-section'),
     manualLoginBtn: document.getElementById('manual-login-btn'),
     authStatus: document.getElementById('auth-status'),
     configStatus: document.getElementById('config-status'),
@@ -19,6 +27,9 @@ const elements = {
     contentSection: document.getElementById('content-section'),
     indexBtn: document.getElementById('index-btn'),
     indexStatus: document.getElementById('index-status'),
+    categoryFilterSection: document.getElementById('category-filter-section'),
+    categoryFilters: document.getElementById('category-filters'),
+    typeFilters: document.getElementById('type-filters'),
     contentTable: document.getElementById('content-table'),
     contentTbody: document.getElementById('content-tbody'),
     selectAllCheckbox: document.getElementById('select-all-checkbox'),
@@ -26,7 +37,6 @@ const elements = {
     selectNoneBtn: document.getElementById('select-none-btn'),
     selectedCount: document.getElementById('selected-count'),
     noContent: document.getElementById('no-content'),
-    categoryFilters: document.getElementById('category-filters'),
     
     // Search
     searchInput: document.getElementById('search-input'),
@@ -45,15 +55,38 @@ const elements = {
 // State
 let contentItems = [];
 let selectedItemIds = new Set();
+let currentSite = null;
+let sites = [];
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
-    loadConfig();
-    checkAuth();
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadSites();
+    await loadConfig();
     setupEventListeners();
 });
 
+async function loadSites() {
+    try {
+        const response = await fetch('/api/sites');
+        sites = await response.json();
+        
+        // Populate site selector
+        elements.siteSelect.innerHTML = '';
+        sites.forEach(site => {
+            const option = document.createElement('option');
+            option.value = site.id;
+            option.textContent = site.name;
+            elements.siteSelect.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Failed to load sites:', error);
+    }
+}
+
 function setupEventListeners() {
+    // Site selector
+    elements.siteSelect.addEventListener('change', onSiteChange);
+    
     // Config
     elements.saveConfigBtn.addEventListener('click', saveConfig);
     elements.loginBtn.addEventListener('click', login);
@@ -62,21 +95,16 @@ function setupEventListeners() {
         elements.downloadDirInput.value = '';
     });
     
+    // KC export toggle
+    elements.exportToKcCheckbox.addEventListener('change', () => {
+        elements.kcDirWrapper.style.display = elements.exportToKcCheckbox.checked ? 'block' : 'none';
+    });
+    
     // Content
     elements.indexBtn.addEventListener('click', indexContent);
     elements.selectAllBtn.addEventListener('click', selectAll);
     elements.selectNoneBtn.addEventListener('click', selectNone);
     elements.selectAllCheckbox.addEventListener('change', toggleSelectAll);
-    
-    // Category filters
-    document.querySelectorAll('#category-filters input').forEach(checkbox => {
-        checkbox.addEventListener('change', applyFilters);
-    });
-    
-    // Type filters
-    document.querySelectorAll('#type-filters input').forEach(checkbox => {
-        checkbox.addEventListener('change', applyFilters);
-    });
     
     // Search
     elements.searchInput.addEventListener('input', debounce(applyFilters, 300));
@@ -87,6 +115,10 @@ function setupEventListeners() {
     
     // Download
     elements.downloadBtn.addEventListener('click', startDownload);
+    
+    // Update login button on input
+    elements.emailInput.addEventListener('input', updateLoginButton);
+    elements.passwordInput.addEventListener('input', updateLoginButton);
 }
 
 // Debounce helper
@@ -102,23 +134,144 @@ function debounce(func, wait) {
     };
 }
 
+// Site change handler
+async function onSiteChange() {
+    const siteId = elements.siteSelect.value;
+    currentSite = sites.find(s => s.id === siteId);
+    
+    // Clear content
+    contentItems = [];
+    selectedItemIds.clear();
+    elements.contentTbody.innerHTML = '';
+    elements.noContent.style.display = 'block';
+    elements.contentTable.style.display = 'none';
+    
+    // Update UI based on site capabilities
+    updateSiteUI();
+    
+    // Save active site and load config
+    await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active_site: siteId })
+    });
+    
+    await loadConfig();
+}
+
+function updateSiteUI() {
+    if (!currentSite) return;
+    
+    // Show/hide auth fields
+    const requiresAuth = currentSite.requires_auth;
+    elements.authFields.style.display = requiresAuth ? 'block' : 'none';
+    elements.authSection.style.display = requiresAuth ? 'block' : 'none';
+    elements.loginBtn.style.display = requiresAuth ? 'inline-flex' : 'none';
+    
+    // Update category filters
+    updateFilters();
+    
+    // Check auth for this site
+    if (requiresAuth) {
+        checkAuth();
+    } else {
+        updateAuthStatus(true, 'No authentication required');
+        elements.contentSection.style.display = 'block';
+    }
+}
+
+function updateFilters() {
+    if (!currentSite) return;
+    
+    // Category filters
+    const categories = currentSite.categories || [];
+    elements.categoryFilters.innerHTML = '';
+    
+    if (categories.length <= 1) {
+        elements.categoryFilterSection.style.display = 'none';
+    } else {
+        elements.categoryFilterSection.style.display = 'flex';
+        categories.forEach(cat => {
+            const label = document.createElement('label');
+            label.className = 'filter-item';
+            label.innerHTML = `
+                <input type="checkbox" data-category="${cat}" checked>
+                <span>${formatCategory(cat)}</span>
+            `;
+            label.querySelector('input').addEventListener('change', applyFilters);
+            elements.categoryFilters.appendChild(label);
+        });
+    }
+    
+    // Type filters
+    const types = currentSite.asset_types || [];
+    elements.typeFilters.innerHTML = '';
+    
+    const typeIcons = {
+        'video': '🎥',
+        'article': '📝',
+        'pdf': '📄',
+        'audio': '🎧',
+        'transcript': '📋'
+    };
+    
+    types.forEach(type => {
+        const label = document.createElement('label');
+        label.className = 'filter-item';
+        label.innerHTML = `
+            <input type="checkbox" data-type="${type}" checked>
+            <span>${typeIcons[type] || '📁'} ${formatCategory(type)}</span>
+        `;
+        label.querySelector('input').addEventListener('change', applyFilters);
+        elements.typeFilters.appendChild(label);
+    });
+}
+
+function formatCategory(str) {
+    return str.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
 // Config Functions
 async function loadConfig() {
     try {
         const response = await fetch('/api/config');
         const config = await response.json();
         
-        if (config.email) {
-            elements.emailInput.value = config.email;
+        // Set active site
+        const activeSite = config.active_site || 'eurodollar';
+        elements.siteSelect.value = activeSite;
+        currentSite = sites.find(s => s.id === activeSite);
+        updateSiteUI();
+        
+        // Load site-specific config
+        const siteConfig = config.sites?.[activeSite] || {};
+        
+        if (siteConfig.email) {
+            elements.emailInput.value = siteConfig.email;
         }
-        if (config.password) {
-            elements.passwordInput.value = config.password;
+        if (siteConfig.password) {
+            elements.passwordInput.value = siteConfig.password;
         }
-        if (config.download_dir) {
-            elements.downloadDirInput.value = config.download_dir;
+        if (siteConfig.download_dir) {
+            elements.downloadDirInput.value = siteConfig.download_dir;
+        }
+        if (siteConfig.export_to_kc) {
+            elements.exportToKcCheckbox.checked = true;
+            elements.kcDirWrapper.style.display = 'block';
+        }
+        if (siteConfig.knowledge_chipper_dir) {
+            elements.kcDirInput.value = siteConfig.knowledge_chipper_dir;
         }
         
         updateLoginButton();
+        
+        // Update auth status
+        if (config.authenticated !== undefined) {
+            updateAuthStatus(config.authenticated, config.auth_message);
+            if (config.authenticated) {
+                elements.contentSection.style.display = 'block';
+            }
+        }
     } catch (error) {
         console.error('Failed to load config:', error);
     }
@@ -126,9 +279,12 @@ async function loadConfig() {
 
 async function saveConfig() {
     const config = {
+        site_id: elements.siteSelect.value,
         email: elements.emailInput.value.trim(),
         password: elements.passwordInput.value,
-        download_dir: elements.downloadDirInput.value.trim()
+        download_dir: elements.downloadDirInput.value.trim(),
+        export_to_kc: elements.exportToKcCheckbox.checked,
+        knowledge_chipper_dir: elements.kcDirInput.value.trim()
     };
     
     elements.saveConfigBtn.disabled = true;
@@ -158,13 +314,13 @@ async function saveConfig() {
 }
 
 function updateLoginButton() {
+    if (!currentSite?.requires_auth) {
+        elements.loginBtn.disabled = true;
+        return;
+    }
     const hasCredentials = elements.emailInput.value.trim() && elements.passwordInput.value;
     elements.loginBtn.disabled = !hasCredentials;
 }
-
-// Update on input
-elements.emailInput.addEventListener('input', updateLoginButton);
-elements.passwordInput.addEventListener('input', updateLoginButton);
 
 // Auth Functions
 async function checkAuth() {
@@ -271,10 +427,15 @@ async function indexContent() {
         contentItems = result.items || [];
         renderContent();
         
-        const summary = result.summary;
+        const summary = result.summary || {};
+        const totalItems = summary.total_items || contentItems.length;
+        const restricted = summary.restricted_count || 0;
+        const errors = summary.error_count || 0;
+        
         showStatus('index', 'success', 
-            `Found ${summary.total_items} items. ` +
-            `${summary.restricted_count} restricted, ${summary.error_count} errors.`
+            `Found ${totalItems} items.` +
+            (restricted > 0 ? ` ${restricted} restricted.` : '') +
+            (errors > 0 ? ` ${errors} errors.` : '')
         );
         
         if (contentItems.length > 0) {
@@ -348,16 +509,16 @@ function applyFilters() {
     const rows = elements.contentTbody.querySelectorAll('tr');
     
     rows.forEach(row => {
-        const title = row.querySelector('.content-title').textContent.toLowerCase();
+        const title = row.querySelector('.content-title')?.textContent.toLowerCase() || '';
         const type = row.dataset.type;
         const category = row.dataset.category;
-        const categoryCell = row.querySelector('.content-category').textContent.toLowerCase();
+        const categoryCell = row.querySelector('.content-category')?.textContent.toLowerCase() || '';
         
         // Search across title, type, and category
         const searchText = `${title} ${type} ${category} ${categoryCell}`;
         const matchesSearch = !searchQuery || searchText.includes(searchQuery);
-        const matchesCategory = selectedCategories.has(category);
-        const matchesType = selectedTypes.has(type);
+        const matchesCategory = selectedCategories.size === 0 || selectedCategories.has(category);
+        const matchesType = selectedTypes.size === 0 || selectedTypes.has(type);
         
         if (matchesSearch && matchesCategory && matchesType) {
             row.classList.remove('filtered-out');
@@ -421,7 +582,6 @@ function updateSelectedCount() {
 async function startDownload() {
     if (selectedItemIds.size === 0) return;
     
-    // All types enabled - filtering is done via the type filters above
     const options = {
         videos: true,
         articles: true,
@@ -531,4 +691,3 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
-
