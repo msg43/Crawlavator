@@ -189,25 +189,59 @@ class LexFridmanSite(BaseSite):
                 episode_num = num_match.group(1)
             
             # Parse segments with timestamps
-            segments = self._parse_transcript_segments(soup, item.id, title)
+            raw_segments = self._parse_transcript_segments(soup, item.id, title)
             
             # Save plain text transcript
-            plain_text = self._segments_to_text(segments, title)
+            plain_text = self._segments_to_text(raw_segments, title)
             with open(txt_path, 'w', encoding='utf-8') as f:
                 f.write(plain_text)
             
-            # Save segments JSON (knowledge_chipper format)
+            # Build knowledge_chipper compatible format with episode context
+            episode_id = f"lex_fridman_{episode_num}" if episode_num else item.id
+            
+            # Clean up title for episode_title (remove "Transcript for" prefix if present)
+            episode_title = re.sub(r'^Transcript\s+for\s+', '', title, flags=re.IGNORECASE)
+            
+            # Wrap each segment with context (miner_input.v1.json format)
+            miner_inputs = []
+            for i, seg in enumerate(raw_segments):
+                miner_input = {
+                    "segment": seg,
+                    "context": {
+                        "episode_id": episode_id,
+                        "episode_title": episode_title,
+                        "source": "Lex Fridman Podcast",
+                        "source_url": item.url
+                    }
+                }
+                # Add previous segments for context (last 2)
+                if i > 0:
+                    prev_segs = []
+                    for j in range(max(0, i-2), i):
+                        prev_segs.append({
+                            "segment_id": raw_segments[j]["segment_id"],
+                            "speaker": raw_segments[j]["speaker"],
+                            "text": raw_segments[j]["text"][:200] + "..." if len(raw_segments[j]["text"]) > 200 else raw_segments[j]["text"]
+                        })
+                    miner_input["context"]["previous_segments"] = prev_segs
+                
+                miner_inputs.append(miner_input)
+            
+            # Save segments JSON (knowledge_chipper miner_input.v1.json format)
             with open(segments_path, 'w', encoding='utf-8') as f:
-                json.dump(segments, f, indent=2, ensure_ascii=False)
+                json.dump(miner_inputs, f, indent=2, ensure_ascii=False)
             
             # Save metadata
             metadata = {
                 'id': item.id,
+                'episode_id': episode_id,
                 'title': title,
+                'episode_title': episode_title,
                 'url': item.url,
                 'episode_number': episode_num,
-                'segment_count': len(segments),
-                'source': 'lexfridman.com'
+                'segment_count': len(raw_segments),
+                'source': 'Lex Fridman Podcast',
+                'source_url': 'lexfridman.com'
             }
             with open(metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
