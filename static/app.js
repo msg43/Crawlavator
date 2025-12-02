@@ -33,13 +33,7 @@ const elements = {
     clearSearchBtn: document.getElementById('clear-search-btn'),
     
     // Download
-    downloadSection: document.getElementById('download-section'),
     downloadBtn: document.getElementById('download-btn'),
-    optVideos: document.getElementById('opt-videos'),
-    optArticles: document.getElementById('opt-articles'),
-    optPdfs: document.getElementById('opt-pdfs'),
-    optAudio: document.getElementById('opt-audio'),
-    optTranscripts: document.getElementById('opt-transcripts'),
     
     // Progress
     progressOverlay: document.getElementById('progress-overlay'),
@@ -182,7 +176,6 @@ async function checkAuth() {
         
         if (result.authenticated) {
             elements.contentSection.style.display = 'block';
-            elements.downloadSection.style.display = 'block';
         }
     } catch (error) {
         updateAuthStatus(false, 'Could not check auth status');
@@ -197,7 +190,6 @@ function updateAuthStatus(isAuthenticated, message) {
     
     if (isAuthenticated) {
         elements.contentSection.style.display = 'block';
-        elements.downloadSection.style.display = 'block';
     }
 }
 
@@ -429,12 +421,13 @@ function updateSelectedCount() {
 async function startDownload() {
     if (selectedItemIds.size === 0) return;
     
+    // All types enabled - filtering is done via the type filters above
     const options = {
-        videos: elements.optVideos.checked,
-        articles: elements.optArticles.checked,
-        pdfs: elements.optPdfs.checked,
-        audio: elements.optAudio.checked,
-        transcripts: elements.optTranscripts.checked
+        videos: true,
+        articles: true,
+        pdfs: true,
+        audio: true,
+        transcripts: true
     };
     
     // Show progress
