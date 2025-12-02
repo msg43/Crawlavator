@@ -313,11 +313,25 @@ small code {
     border-radius: 6px;
 }
 
-/* Category Filters */
-.category-filters {
+/* Filter Sections */
+.filter-section {
     display: flex;
+    align-items: center;
     gap: 1rem;
-    margin-bottom: 1rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.filter-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    min-width: 70px;
+}
+
+.filter-group {
+    display: flex;
+    gap: 0.75rem;
     flex-wrap: wrap;
 }
 

@@ -75,7 +75,12 @@ function setupEventListeners() {
     elements.selectAllCheckbox.addEventListener('change', toggleSelectAll);
     
     // Category filters
-    document.querySelectorAll('.filter-item input').forEach(checkbox => {
+    document.querySelectorAll('#category-filters input').forEach(checkbox => {
+        checkbox.addEventListener('change', applyFilters);
+    });
+    
+    // Type filters
+    document.querySelectorAll('#type-filters input').forEach(checkbox => {
         checkbox.addEventListener('change', applyFilters);
     });
     
@@ -338,24 +343,31 @@ function applyFilters() {
     
     // Get selected categories
     const selectedCategories = new Set();
-    document.querySelectorAll('.filter-item input:checked').forEach(cb => {
+    document.querySelectorAll('#category-filters input:checked').forEach(cb => {
         selectedCategories.add(cb.dataset.category);
+    });
+    
+    // Get selected types
+    const selectedTypes = new Set();
+    document.querySelectorAll('#type-filters input:checked').forEach(cb => {
+        selectedTypes.add(cb.dataset.type);
     });
     
     const rows = elements.contentTbody.querySelectorAll('tr');
     
     rows.forEach(row => {
         const title = row.querySelector('.content-title').textContent.toLowerCase();
-        const type = row.dataset.type.toLowerCase();
-        const category = row.dataset.category.toLowerCase();
+        const type = row.dataset.type;
+        const category = row.dataset.category;
         const categoryCell = row.querySelector('.content-category').textContent.toLowerCase();
         
         // Search across title, type, and category
         const searchText = `${title} ${type} ${category} ${categoryCell}`;
         const matchesSearch = !searchQuery || searchText.includes(searchQuery);
-        const matchesCategory = selectedCategories.has(row.dataset.category);
+        const matchesCategory = selectedCategories.has(category);
+        const matchesType = selectedTypes.has(type);
         
-        if (matchesSearch && matchesCategory) {
+        if (matchesSearch && matchesCategory && matchesType) {
             row.classList.remove('filtered-out');
         } else {
             row.classList.add('filtered-out');

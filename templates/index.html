@@ -68,19 +68,49 @@
             <div id="index-status" class="status-message"></div>
             
             <!-- Category Filters -->
-            <div class="category-filters" id="category-filters">
-                <label class="filter-item">
-                    <input type="checkbox" data-category="membership" checked>
-                    <span>Membership</span>
-                </label>
-                <label class="filter-item">
-                    <input type="checkbox" data-category="dda" checked>
-                    <span>Deep Dive Analysis</span>
-                </label>
-                <label class="filter-item">
-                    <input type="checkbox" data-category="daily-briefing" checked>
-                    <span>Daily Briefing</span>
-                </label>
+            <div class="filter-section">
+                <span class="filter-label">Category:</span>
+                <div class="filter-group" id="category-filters">
+                    <label class="filter-item">
+                        <input type="checkbox" data-category="membership" checked>
+                        <span>Membership</span>
+                    </label>
+                    <label class="filter-item">
+                        <input type="checkbox" data-category="dda" checked>
+                        <span>Deep Dive Analysis</span>
+                    </label>
+                    <label class="filter-item">
+                        <input type="checkbox" data-category="daily-briefing" checked>
+                        <span>Daily Briefing</span>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Type Filters -->
+            <div class="filter-section">
+                <span class="filter-label">Type:</span>
+                <div class="filter-group" id="type-filters">
+                    <label class="filter-item">
+                        <input type="checkbox" data-type="video" checked>
+                        <span>🎥 Videos</span>
+                    </label>
+                    <label class="filter-item">
+                        <input type="checkbox" data-type="article" checked>
+                        <span>📝 Articles</span>
+                    </label>
+                    <label class="filter-item">
+                        <input type="checkbox" data-type="pdf" checked>
+                        <span>📄 PDFs</span>
+                    </label>
+                    <label class="filter-item">
+                        <input type="checkbox" data-type="audio" checked>
+                        <span>🎧 Audio</span>
+                    </label>
+                    <label class="filter-item">
+                        <input type="checkbox" data-type="transcript" checked>
+                        <span>📋 Transcripts</span>
+                    </label>
+                </div>
             </div>
 
             <!-- Search Filter -->
