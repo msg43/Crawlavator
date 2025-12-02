@@ -55,13 +55,27 @@ class LexFridmanSite(BaseSite):
         
         try:
             # Get the main podcast page
-            response = self.session.get(self.PODCAST_URL, timeout=30)
+            response = self.session.get(self.PODCAST_URL, timeout=60)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, 'lxml')
             
-            # Find all transcript links
-            transcript_links = soup.find_all('a', href=re.compile(r'-transcript$'))
+            # Find all transcript links - multiple patterns
+            # Pattern 1: Links ending in -transcript
+            transcript_links = soup.find_all('a', href=re.compile(r'-transcript/?$'))
+            
+            # Pattern 2: Links containing /transcript in path
+            transcript_links.extend(soup.find_all('a', href=re.compile(r'/[^/]+-transcript/?$')))
+            
+            # Dedupe by href
+            seen_hrefs = set()
+            unique_links = []
+            for link in transcript_links:
+                href = link.get('href', '')
+                if href and href not in seen_hrefs:
+                    seen_hrefs.add(href)
+                    unique_links.append(link)
+            transcript_links = unique_links
             
             if progress_callback:
                 progress_callback(f"Found {len(transcript_links)} transcript links, parsing...")
@@ -78,72 +92,71 @@ class LexFridmanSite(BaseSite):
                 # Make absolute URL
                 full_url = urljoin(self.BASE_URL, href)
                 
-                # Extract episode info from URL
+                # Extract slug from URL
                 # Pattern: /guest-name-transcript or /guest-name-N-transcript
-                slug = href.replace('-transcript', '').strip('/')
+                slug = href.split('/')[-1].replace('-transcript', '').strip('/')
+                if not slug:
+                    slug = href.replace('-transcript', '').strip('/')
                 
-                # Get title from nearby elements - look for the episode title link
+                # Initialize
                 title = None
                 episode_num = None
+                guest_name = None
                 
-                # The transcript link is usually in a container with the episode info
-                # Look for nearby links that point to the episode page or YouTube
-                parent = link.find_parent(['div', 'li', 'section', 'generic'])
+                # Try to find title from nearby elements
+                parent = link.find_parent(['div', 'li', 'section'])
                 
                 if parent:
-                    # Look for links that might be episode titles (not the transcript link itself)
-                    episode_links = parent.find_all('a')
-                    for ep_link in episode_links:
-                        ep_href = ep_link.get('href', '')
-                        ep_text = ep_link.get_text(strip=True)
+                    # Look for the main title link (usually YouTube or Episode link)
+                    for sibling_link in parent.find_all('a'):
+                        sibling_href = sibling_link.get('href', '')
+                        sibling_text = sibling_link.get_text(strip=True)
                         
-                        # Skip transcript links, video links, and generic nav
-                        if '-transcript' in ep_href or 'youtube.com' in ep_href:
+                        # Skip transcript/video/episode nav links
+                        if sibling_text.lower() in ['transcript', 'video', 'episode', 'youtube', '']:
                             continue
-                        if ep_text.lower() in ['transcript', 'video', 'episode', '']:
+                        if '-transcript' in sibling_href:
                             continue
                         
-                        # This might be the episode title
-                        if len(ep_text) > 10:  # Reasonable title length
-                            title = ep_text
-                            # Extract episode number from title
+                        # Look for substantial title text
+                        if len(sibling_text) > 15:
+                            title = sibling_text
+                            # Extract episode number
                             num_match = re.search(r'#(\d+)', title)
                             if num_match:
                                 episode_num = num_match.group(1)
                             break
                     
-                    # Also check for person/description spans
-                    if not title:
-                        spans = parent.find_all(['span', 'div'])
-                        for span in spans:
-                            span_text = span.get_text(strip=True)
-                            if len(span_text) > 20 and not span_text.lower().startswith(('video', 'transcript', 'episode')):
-                                # Could be a title or description
-                                title = span_text[:100]
-                                break
+                    # Try to get guest description text
+                    if not guest_name:
+                        parent_text = parent.get_text(separator=' ', strip=True)
+                        # Look for "Name - Description -" pattern
+                        desc_match = re.search(r'([A-Z][a-z]+ [A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*[-–]', parent_text)
+                        if desc_match:
+                            guest_name = desc_match.group(1)
                 
-                # Fallback: use slug as title
-                if not title or title.lower() == 'transcript':
-                    title = slug.replace('-', ' ').title()
-                    # Try to make it nicer
-                    title = re.sub(r'(\d+)$', r'#\1', title)  # Add # before trailing numbers
+                # Extract guest name from title or slug
+                if title and not guest_name:
+                    guest_name = title
+                    # Remove common suffixes
+                    guest_name = re.sub(r'\s*\|\s*Lex Fridman Podcast.*$', '', guest_name, flags=re.IGNORECASE)
+                    guest_name = re.sub(r'\s*#\d+\s*$', '', guest_name).strip()
+                    # Get just the guest name (before colon)
+                    colon_match = re.match(r'^([^:]+)', guest_name)
+                    if colon_match and len(colon_match.group(1)) > 3:
+                        guest_name = colon_match.group(1).strip()
                 
-                # Clean up title - remove URL prefixes if present
-                title = re.sub(r'^https?://[^/]+/', '', title, flags=re.IGNORECASE)
-                title = title.strip()
+                # Fallback: use slug as guest name
+                if not guest_name or len(guest_name) < 3:
+                    guest_name = slug.replace('-', ' ').title()
+                    # Handle numbered guests like "guest-2"
+                    guest_name = re.sub(r'\s+(\d+)$', r' #\1', guest_name)
                 
-                # Extract guest name from title for cleaner folder names
-                guest_name = title
-                # Remove "Lex Fridman Podcast" suffix
-                guest_name = re.sub(r'\s*\|\s*Lex Fridman Podcast.*$', '', guest_name, flags=re.IGNORECASE)
-                # Remove episode number from the middle/end
-                guest_name = re.sub(r'\s*#\d+\s*$', '', guest_name).strip()
-                # Remove any trailing colons or descriptions
-                colon_match = re.match(r'^([^:]+)', guest_name)
-                if colon_match and len(colon_match.group(1)) > 5:
-                    guest_name = colon_match.group(1).strip()
+                # Clean up guest name
+                guest_name = re.sub(r'^https?://[^/]+/', '', guest_name, flags=re.IGNORECASE)
+                guest_name = guest_name.strip()
                 
-                # Generate ID and display title with episode number prefix
+                # Generate ID and display title
                 if episode_num:
                     item_id = f"lex_{episode_num}_{slug}"
                     display_title = f"{episode_num} - {guest_name}"
@@ -158,7 +171,7 @@ class LexFridmanSite(BaseSite):
                     asset_type="transcript",
                     category="podcast",
                     subcategory="transcripts",
-                    description=f"Lex Fridman Podcast #{episode_num}: {title}" if episode_num else title
+                    description=f"Lex Fridman Podcast #{episode_num}: {title}" if episode_num and title else (title or guest_name)
                 )
                 
                 if item.id not in self.indexed_content:
