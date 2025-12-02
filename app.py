@@ -13,6 +13,7 @@ from flask import Flask, render_template, request, jsonify, Response
 # Import site plugins - this registers them
 from sites import list_sites, get_site, ContentItem
 from sites.eurodollar import EurodollarSite
+from sites.lexfridman import LexFridmanSite
 from shared import DownloadManager
 
 app = Flask(__name__)

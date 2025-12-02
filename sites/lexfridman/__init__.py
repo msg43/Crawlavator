@@ -82,33 +82,55 @@ class LexFridmanSite(BaseSite):
                 # Pattern: /guest-name-transcript or /guest-name-N-transcript
                 slug = href.replace('-transcript', '').strip('/')
                 
-                # Get title from nearby elements
+                # Get title from nearby elements - look for the episode title link
                 title = None
-                parent = link.find_parent(['div', 'li', 'section'])
-                if parent:
-                    # Look for episode title
-                    title_elem = parent.find(['h2', 'h3', 'h4', 'a'])
-                    if title_elem and title_elem != link:
-                        title = title_elem.get_text(strip=True)
-                
-                if not title:
-                    title = link.get_text(strip=True)
-                    if title.lower() == 'transcript':
-                        # Use slug as title
-                        title = slug.replace('-', ' ').title()
-                
-                # Try to extract episode number
                 episode_num = None
-                num_match = re.search(r'#(\d+)', title)
-                if num_match:
-                    episode_num = num_match.group(1)
-                else:
-                    # Try to get from nearby text
-                    if parent:
-                        parent_text = parent.get_text()
-                        num_match = re.search(r'#(\d+)', parent_text)
-                        if num_match:
-                            episode_num = num_match.group(1)
+                
+                # The transcript link is usually in a container with the episode info
+                # Look for nearby links that point to the episode page or YouTube
+                parent = link.find_parent(['div', 'li', 'section', 'generic'])
+                
+                if parent:
+                    # Look for links that might be episode titles (not the transcript link itself)
+                    episode_links = parent.find_all('a')
+                    for ep_link in episode_links:
+                        ep_href = ep_link.get('href', '')
+                        ep_text = ep_link.get_text(strip=True)
+                        
+                        # Skip transcript links, video links, and generic nav
+                        if '-transcript' in ep_href or 'youtube.com' in ep_href:
+                            continue
+                        if ep_text.lower() in ['transcript', 'video', 'episode', '']:
+                            continue
+                        
+                        # This might be the episode title
+                        if len(ep_text) > 10:  # Reasonable title length
+                            title = ep_text
+                            # Extract episode number from title
+                            num_match = re.search(r'#(\d+)', title)
+                            if num_match:
+                                episode_num = num_match.group(1)
+                            break
+                    
+                    # Also check for person/description spans
+                    if not title:
+                        spans = parent.find_all(['span', 'div'])
+                        for span in spans:
+                            span_text = span.get_text(strip=True)
+                            if len(span_text) > 20 and not span_text.lower().startswith(('video', 'transcript', 'episode')):
+                                # Could be a title or description
+                                title = span_text[:100]
+                                break
+                
+                # Fallback: use slug as title
+                if not title or title.lower() == 'transcript':
+                    title = slug.replace('-', ' ').title()
+                    # Try to make it nicer
+                    title = re.sub(r'(\d+)$', r'#\1', title)  # Add # before trailing numbers
+                
+                # Clean up title - remove URL prefixes if present
+                title = re.sub(r'^https?://[^/]+/', '', title, flags=re.IGNORECASE)
+                title = title.strip()
                 
                 # Generate ID
                 if episode_num:
