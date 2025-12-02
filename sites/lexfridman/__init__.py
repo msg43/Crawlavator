@@ -132,20 +132,33 @@ class LexFridmanSite(BaseSite):
                 title = re.sub(r'^https?://[^/]+/', '', title, flags=re.IGNORECASE)
                 title = title.strip()
                 
-                # Generate ID
+                # Extract guest name from title for cleaner folder names
+                guest_name = title
+                # Remove "Lex Fridman Podcast" suffix
+                guest_name = re.sub(r'\s*\|\s*Lex Fridman Podcast.*$', '', guest_name, flags=re.IGNORECASE)
+                # Remove episode number from the middle/end
+                guest_name = re.sub(r'\s*#\d+\s*$', '', guest_name).strip()
+                # Remove any trailing colons or descriptions
+                colon_match = re.match(r'^([^:]+)', guest_name)
+                if colon_match and len(colon_match.group(1)) > 5:
+                    guest_name = colon_match.group(1).strip()
+                
+                # Generate ID and display title with episode number prefix
                 if episode_num:
                     item_id = f"lex_{episode_num}_{slug}"
+                    display_title = f"{episode_num} - {guest_name}"
                 else:
                     item_id = f"lex_{slug}"
+                    display_title = guest_name
                 
                 item = ContentItem(
                     id=item_id,
-                    title=title,
+                    title=display_title,
                     url=full_url,
                     asset_type="transcript",
                     category="podcast",
                     subcategory="transcripts",
-                    description=f"Episode #{episode_num}" if episode_num else ""
+                    description=f"Lex Fridman Podcast #{episode_num}: {title}" if episode_num else title
                 )
                 
                 if item.id not in self.indexed_content:
@@ -165,14 +178,9 @@ class LexFridmanSite(BaseSite):
     def download_item(self, item: ContentItem, output_dir: str,
                       progress_callback=None) -> Tuple[bool, str]:
         """Download a transcript and parse to segments"""
-        os.makedirs(output_dir, exist_ok=True)
-        
-        txt_path = os.path.join(output_dir, 'transcript.txt')
-        segments_path = os.path.join(output_dir, 'segments.json')
-        metadata_path = os.path.join(output_dir, 'metadata.json')
         
         try:
-            # Fetch transcript page
+            # Fetch transcript page first to get episode info
             response = self.session.get(item.url, timeout=30)
             response.raise_for_status()
             
@@ -187,6 +195,34 @@ class LexFridmanSite(BaseSite):
             num_match = re.search(r'#(\d+)', title)
             if num_match:
                 episode_num = num_match.group(1)
+            
+            # Extract guest name from title (before the colon or pipe)
+            guest_name = title
+            # Remove "Transcript for " prefix
+            guest_name = re.sub(r'^Transcript\s+for\s+', '', guest_name, flags=re.IGNORECASE)
+            # Get just the guest name (before : or |)
+            name_match = re.match(r'^([^:|]+)', guest_name)
+            if name_match:
+                guest_name = name_match.group(1).strip()
+            # Remove episode number from guest name
+            guest_name = re.sub(r'\s*\|\s*Lex Fridman Podcast.*$', '', guest_name)
+            guest_name = re.sub(r'\s*#\d+\s*$', '', guest_name).strip()
+            
+            # Create clean filename prefix: "486_Michael_Levin" or "Michael_Levin"
+            safe_guest = re.sub(r'[<>:"/\\|?*]', '', guest_name)
+            safe_guest = re.sub(r'\s+', '_', safe_guest).strip('._')
+            if episode_num:
+                file_prefix = f"{episode_num}_{safe_guest}"
+            else:
+                file_prefix = safe_guest
+            
+            # Create output directory with episode name
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # File paths with episode names
+            txt_path = os.path.join(output_dir, f'{file_prefix}_transcript.txt')
+            segments_path = os.path.join(output_dir, f'{file_prefix}_segments.json')
+            metadata_path = os.path.join(output_dir, f'{file_prefix}_metadata.json')
             
             # Parse segments with timestamps
             raw_segments = self._parse_transcript_segments(soup, item.id, title)
