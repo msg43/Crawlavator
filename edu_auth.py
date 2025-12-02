@@ -61,9 +61,22 @@ class EDUAuth:
         if not os.path.exists(self.SESSION_FILE):
             return False, "No saved session found"
         
+        # For thread safety, create a fresh browser instance for checking
+        playwright = None
+        browser = None
+        context = None
+        
         try:
-            self._ensure_browser(headless=True)
-            page = self.context.new_page()
+            playwright = sync_playwright().start()
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=['--disable-blink-features=AutomationControlled']
+            )
+            context = browser.new_context(
+                storage_state=self.SESSION_FILE,
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            page = context.new_page()
             
             # Navigate to a protected page
             page.goto('https://www.eurodollar.university/members-home', wait_until='networkidle', timeout=30000)
@@ -85,6 +98,23 @@ class EDUAuth:
             
         except Exception as e:
             return False, f"Session check failed: {str(e)}"
+        finally:
+            # Clean up
+            if context:
+                try:
+                    context.close()
+                except:
+                    pass
+            if browser:
+                try:
+                    browser.close()
+                except:
+                    pass
+            if playwright:
+                try:
+                    playwright.stop()
+                except:
+                    pass
     
     def login(self, email: str, password: str, headless: bool = False) -> Tuple[bool, str]:
         """
@@ -210,8 +240,9 @@ class EDUAuth:
     
     def get_page(self) -> Page:
         """Get a new page with authenticated context"""
-        if not self.context:
-            self._ensure_browser(headless=True)
+        # Close any existing context to avoid thread issues
+        self.close()
+        self._ensure_browser(headless=True)
         return self.context.new_page()
     
     def get_cookies(self) -> dict:
