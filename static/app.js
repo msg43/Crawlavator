@@ -346,10 +346,14 @@ function applyFilters() {
     
     rows.forEach(row => {
         const title = row.querySelector('.content-title').textContent.toLowerCase();
-        const category = row.dataset.category;
+        const type = row.dataset.type.toLowerCase();
+        const category = row.dataset.category.toLowerCase();
+        const categoryCell = row.querySelector('.content-category').textContent.toLowerCase();
         
-        const matchesSearch = !searchQuery || title.includes(searchQuery);
-        const matchesCategory = selectedCategories.has(category);
+        // Search across title, type, and category
+        const searchText = `${title} ${type} ${category} ${categoryCell}`;
+        const matchesSearch = !searchQuery || searchText.includes(searchQuery);
+        const matchesCategory = selectedCategories.has(row.dataset.category);
         
         if (matchesSearch && matchesCategory) {
             row.classList.remove('filtered-out');
