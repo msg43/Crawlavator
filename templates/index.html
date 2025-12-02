@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crawlavator - Eurodollar University Downloader</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Crawlavator</h1>
+            <p class="subtitle">Download your Eurodollar University content</p>
+        </header>
+
+        <!-- Configuration Section -->
+        <section class="config-section card" id="config-section">
+            <h2>Configuration</h2>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" placeholder="your@email.com">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" placeholder="Your password">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="download-dir">Download Directory</label>
+                <div class="input-with-button">
+                    <input type="text" id="download-dir" placeholder="~/Downloads/eurodollar">
+                    <button class="btn btn-small" id="reset-dir-btn" type="button">Reset</button>
+                </div>
+                <small>Where to save downloaded files. Leave empty for default (<code>./downloads</code>)</small>
+            </div>
+
+            <div class="button-group">
+                <button class="btn btn-primary" id="save-config-btn">Save Configuration</button>
+                <button class="btn btn-secondary" id="login-btn" disabled>Login</button>
+            </div>
+            
+            <div class="auth-section">
+                <div class="auth-divider">
+                    <span>Authentication Status</span>
+                </div>
+                <div id="auth-status" class="auth-status">Checking...</div>
+                <button class="btn btn-secondary" id="manual-login-btn">Open Browser for Manual Login</button>
+            </div>
+            
+            <div id="config-status" class="status-message"></div>
+        </section>
+
+        <!-- Content Section -->
+        <section class="content-section card" id="content-section" style="display: none;">
+            <div class="section-header">
+                <h2>Available Content</h2>
+                <div class="content-controls">
+                    <button class="btn btn-primary" id="index-btn">Scan Content</button>
+                    <button class="btn btn-small" id="select-all-btn">Select All</button>
+                    <button class="btn btn-small" id="select-none-btn">Select None</button>
+                    <span class="selected-count" id="selected-count">0 selected</span>
+                </div>
+            </div>
+
+            <div id="index-status" class="status-message"></div>
+            
+            <!-- Category Filters -->
+            <div class="category-filters" id="category-filters">
+                <label class="filter-item">
+                    <input type="checkbox" data-category="membership" checked>
+                    <span>Membership</span>
+                </label>
+                <label class="filter-item">
+                    <input type="checkbox" data-category="dda" checked>
+                    <span>Deep Dive Analysis</span>
+                </label>
+                <label class="filter-item">
+                    <input type="checkbox" data-category="daily-briefing" checked>
+                    <span>Daily Briefing</span>
+                </label>
+            </div>
+
+            <!-- Search Filter -->
+            <div class="search-filter">
+                <div class="search-input-wrapper">
+                    <input type="text" id="search-input" placeholder="Search content...">
+                    <button class="btn btn-small" id="clear-search-btn" title="Clear search">✕</button>
+                </div>
+            </div>
+
+            <!-- Content Table -->
+            <div class="table-container">
+                <table class="content-table" id="content-table">
+                    <thead>
+                        <tr>
+                            <th class="checkbox-col"><input type="checkbox" id="select-all-checkbox"></th>
+                            <th>Title</th>
+                            <th>Type</th>
+                            <th>Category</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="content-tbody">
+                        <!-- Content will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="no-content" class="empty-state" style="display: none;">
+                <p>No content found. Click "Scan Content" to index available content.</p>
+            </div>
+        </section>
+
+        <!-- Download Options Section -->
+        <section class="download-section card" id="download-section" style="display: none;">
+            <h2>Download Options</h2>
+            
+            <div class="options-grid">
+                <label class="option-item">
+                    <input type="checkbox" id="opt-videos" checked>
+                    <span class="option-label">
+                        <span class="option-icon">🎥</span>
+                        <span class="option-text">Videos</span>
+                    </span>
+                </label>
+                
+                <label class="option-item">
+                    <input type="checkbox" id="opt-articles" checked>
+                    <span class="option-label">
+                        <span class="option-icon">📝</span>
+                        <span class="option-text">Articles (DDA)</span>
+                    </span>
+                </label>
+                
+                <label class="option-item">
+                    <input type="checkbox" id="opt-pdfs" checked>
+                    <span class="option-label">
+                        <span class="option-icon">📄</span>
+                        <span class="option-text">PDFs (Briefings)</span>
+                    </span>
+                </label>
+                
+                <label class="option-item">
+                    <input type="checkbox" id="opt-audio" checked>
+                    <span class="option-label">
+                        <span class="option-icon">🎧</span>
+                        <span class="option-text">Audio Files</span>
+                    </span>
+                </label>
+                
+                <label class="option-item">
+                    <input type="checkbox" id="opt-transcripts" checked>
+                    <span class="option-label">
+                        <span class="option-icon">📋</span>
+                        <span class="option-text">Transcripts</span>
+                    </span>
+                </label>
+            </div>
+
+            <button class="btn btn-primary btn-large" id="download-btn" disabled>
+                Download Selected Content
+            </button>
+        </section>
+
+        <!-- Progress Overlay -->
+        <div class="progress-overlay" id="progress-overlay" style="display: none;">
+            <div class="progress-modal">
+                <h2>Downloading...</h2>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progress-bar"></div>
+                </div>
+                <p class="progress-text" id="progress-text">Preparing download...</p>
+                <div class="progress-log" id="progress-log"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
+
