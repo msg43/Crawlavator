@@ -237,14 +237,21 @@ async function loadConfig() {
         const response = await fetch('/api/config');
         const config = await response.json();
         
-        // Set active site
-        const activeSite = config.active_site || 'eurodollar';
-        elements.siteSelect.value = activeSite;
+        // Use current dropdown value if set, otherwise use backend's active_site
+        const currentDropdownValue = elements.siteSelect.value;
+        const activeSite = currentDropdownValue || config.active_site || 'eurodollar';
+        
+        // Only update dropdown if it's not already set correctly
+        if (elements.siteSelect.value !== activeSite) {
+            elements.siteSelect.value = activeSite;
+        }
         currentSite = sites.find(s => s.id === activeSite);
         updateSiteUI();
         
-        // Load site-specific config
+        // Load site-specific config for the CURRENT dropdown selection
         const siteConfig = config.sites?.[activeSite] || {};
+        
+        console.log(`Loading config for site: ${activeSite}`, siteConfig);
         
         // Clear form fields first, then populate with site-specific values
         elements.emailInput.value = siteConfig.email || '';
@@ -269,14 +276,18 @@ async function loadConfig() {
 }
 
 async function saveConfig() {
+    const siteId = elements.siteSelect.value;
     const config = {
-        site_id: elements.siteSelect.value,
+        site_id: siteId,
+        active_site: siteId,  // Also update active_site to match
         email: elements.emailInput.value.trim(),
         password: elements.passwordInput.value,
         download_dir: elements.downloadDirInput.value.trim(),
         export_to_kc: elements.exportToKcCheckbox.checked,
         knowledge_chipper_dir: elements.kcDirInput.value.trim()
     };
+    
+    console.log(`Saving config for site: ${siteId}`, config);
     
     elements.saveConfigBtn.disabled = true;
     elements.saveConfigBtn.textContent = 'Saving...';
