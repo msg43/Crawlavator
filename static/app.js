@@ -246,22 +246,13 @@ async function loadConfig() {
         // Load site-specific config
         const siteConfig = config.sites?.[activeSite] || {};
         
-        if (siteConfig.email) {
-            elements.emailInput.value = siteConfig.email;
-        }
-        if (siteConfig.password) {
-            elements.passwordInput.value = siteConfig.password;
-        }
-        if (siteConfig.download_dir) {
-            elements.downloadDirInput.value = siteConfig.download_dir;
-        }
-        if (siteConfig.export_to_kc) {
-            elements.exportToKcCheckbox.checked = true;
-            elements.kcDirWrapper.style.display = 'block';
-        }
-        if (siteConfig.knowledge_chipper_dir) {
-            elements.kcDirInput.value = siteConfig.knowledge_chipper_dir;
-        }
+        // Clear form fields first, then populate with site-specific values
+        elements.emailInput.value = siteConfig.email || '';
+        elements.passwordInput.value = siteConfig.password || '';
+        elements.downloadDirInput.value = siteConfig.download_dir || '';
+        elements.exportToKcCheckbox.checked = siteConfig.export_to_kc || false;
+        elements.kcDirWrapper.style.display = siteConfig.export_to_kc ? 'block' : 'none';
+        elements.kcDirInput.value = siteConfig.knowledge_chipper_dir || '';
         
         updateLoginButton();
         

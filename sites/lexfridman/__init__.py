@@ -264,7 +264,7 @@ class LexFridmanSite(BaseSite):
             with open(metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
             
-            return True, f"Saved {len(segments)} segments"
+            return True, f"Saved {len(raw_segments)} segments"
             
         except Exception as e:
             return False, f"Download error: {str(e)}"
