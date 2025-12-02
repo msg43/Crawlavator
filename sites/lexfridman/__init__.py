@@ -211,7 +211,16 @@ class LexFridmanSite(BaseSite):
                         "episode_id": episode_id,
                         "episode_title": episode_title,
                         "source": "Lex Fridman Podcast",
-                        "source_url": item.url
+                        "source_url": item.url,
+                        # Knowledge Chipper tracking fields
+                        "source_type": "crawlavator",  # Identifies ingestion method
+                        "ingestion_method": "crawlavator_import",
+                        "original_source_type": "podcast_transcript"
+                    },
+                    "provenance": {
+                        "producer_app": "crawlavator",
+                        "version": "1.0.0",
+                        "import_source": "lexfridman.com"
                     }
                 }
                 # Add previous segments for context (last 2)
@@ -241,7 +250,16 @@ class LexFridmanSite(BaseSite):
                 'episode_number': episode_num,
                 'segment_count': len(raw_segments),
                 'source': 'Lex Fridman Podcast',
-                'source_url': 'lexfridman.com'
+                'source_url': 'lexfridman.com',
+                # Knowledge Chipper tracking
+                'source_type': 'crawlavator',
+                'ingestion_method': 'crawlavator_import',
+                'original_source_type': 'podcast_transcript',
+                'provenance': {
+                    'producer_app': 'crawlavator',
+                    'version': '1.0.0',
+                    'import_source': 'lexfridman.com'
+                }
             }
             with open(metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
