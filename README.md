@@ -66,7 +66,7 @@ playwright install chromium
 python app.py
 ```
 
-2. **Open your browser** and go to http://localhost:5000
+2. **Open your browser** and go to http://localhost:5001
 
 3. **Configure your credentials**
    - Enter your email and password
