@@ -229,17 +229,27 @@ class LexFridmanSite(BaseSite):
         if not content:
             return segments
         
-        # Look for timestamped segments
-        # Lex Fridman format: Speaker name, timestamp link, then text
-        # Example: <span>Lex Fridman</span> <a href="...">(00:00:45)</a> text...
+        # Extract chapter headings for topic hints
+        chapter_map = {}  # timestamp -> chapter name
+        chapter_links = content.find_all('a', href=re.compile(r'#chapter'))
+        for ch_link in chapter_links:
+            ch_text = ch_link.get_text(strip=True)
+            ts_match = re.search(r'^(\d{1,2}:\d{2}(?::\d{2})?)\s*[–-]\s*(.+)', ch_text)
+            if ts_match:
+                ts = ts_match.group(1)
+                # Normalize to HH:MM:SS
+                parts = ts.split(':')
+                if len(parts) == 2:
+                    ts = f"00:{parts[0].zfill(2)}:{parts[1].zfill(2)}"
+                elif len(parts) == 3:
+                    ts = f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2].zfill(2)}"
+                chapter_map[ts] = ts_match.group(2).strip()
         
         segment_idx = 0
         current_speaker = "Unknown"
+        current_chapter = None
         
-        # Find all elements that might contain segments
-        # The transcript uses divs/paragraphs with speaker + timestamp + text
-        
-        # First try to find timestamp links
+        # Find timestamp links (Lex format: <a href="...?t=seconds">(HH:MM:SS)</a>)
         timestamp_links = content.find_all('a', href=re.compile(r'[?&]t=\d+'))
         
         for ts_link in timestamp_links:
@@ -252,20 +262,30 @@ class LexFridmanSite(BaseSite):
                 
                 timestamp = ts_match.group(1)
                 
-                # Get speaker (usually in preceding element)
-                parent = ts_link.parent
-                speaker_elem = parent.find_previous(['span', 'strong', 'b'])
-                if speaker_elem:
-                    speaker_text = speaker_elem.get_text(strip=True)
-                    # Check if it looks like a speaker name
-                    if speaker_text and len(speaker_text) < 50 and not speaker_text.startswith('('):
-                        current_speaker = speaker_text
+                # Check if this timestamp starts a new chapter
+                if timestamp in chapter_map:
+                    current_chapter = chapter_map[timestamp]
                 
-                # Get text (everything after timestamp until next timestamp)
+                # Get speaker - look in parent container
+                parent = ts_link.parent
+                if parent:
+                    # The speaker is usually the first child element before the timestamp
+                    for child in parent.children:
+                        if hasattr(child, 'get_text'):
+                            child_text = child.get_text(strip=True)
+                            # Check if it's a speaker name (not timestamp, not too long)
+                            if (child_text and 
+                                len(child_text) < 50 and 
+                                not child_text.startswith('(') and
+                                child_text not in ['', 'Transcript']):
+                                current_speaker = child_text
+                                break
+                
+                # Get text content (after timestamp link)
                 text_parts = []
                 for sibling in ts_link.next_siblings:
                     if hasattr(sibling, 'name'):
-                        # Check if this is another timestamp
+                        # Stop if we hit another timestamp link
                         if sibling.name == 'a' and sibling.get('href') and 't=' in sibling.get('href', ''):
                             break
                         text = sibling.get_text(strip=True)
@@ -280,17 +300,17 @@ class LexFridmanSite(BaseSite):
                 if not segment_text:
                     continue
                 
-                # Calculate end timestamp (use next segment's start or add 60s)
-                # We'll fix this in a second pass
-                end_timestamp = timestamp
-                
                 segment = {
                     'segment_id': f"{episode_id}_seg_{segment_idx:04d}",
                     'speaker': current_speaker,
                     'timestamp_start': timestamp,
-                    'timestamp_end': end_timestamp,
+                    'timestamp_end': timestamp,  # Will be fixed in second pass
                     'text': segment_text
                 }
+                
+                # Add topic hint if available
+                if current_chapter:
+                    segment['topic_guess'] = current_chapter
                 
                 segments.append(segment)
                 segment_idx += 1
@@ -298,9 +318,19 @@ class LexFridmanSite(BaseSite):
             except Exception:
                 continue
         
-        # Second pass: fix end timestamps
+        # Second pass: calculate end timestamps from next segment's start
         for i in range(len(segments) - 1):
             segments[i]['timestamp_end'] = segments[i + 1]['timestamp_start']
+        
+        # For the last segment, estimate 60 seconds duration
+        if segments:
+            last_start = segments[-1]['timestamp_start']
+            h, m, s = map(int, last_start.split(':'))
+            end_seconds = h * 3600 + m * 60 + s + 60
+            end_h = end_seconds // 3600
+            end_m = (end_seconds % 3600) // 60
+            end_s = end_seconds % 60
+            segments[-1]['timestamp_end'] = f"{end_h:02d}:{end_m:02d}:{end_s:02d}"
         
         # If no segments found with timestamp links, try alternative parsing
         if not segments:

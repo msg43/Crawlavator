@@ -487,7 +487,7 @@ if __name__ == '__main__':
     print("\n" + "="*50)
     print("Crawlavator - Multi-Site Batch Downloader")
     print("="*50)
-    print(f"Open http://localhost:5001 in your browser")
+    print(f"Open http://localhost:5002 in your browser")
     print("="*50 + "\n")
     
-    app.run(debug=True, port=5001, threaded=True)
+    app.run(debug=True, port=5002, threaded=True)
