@@ -221,18 +221,18 @@ class LexFridmanSite(BaseSite):
             guest_name = re.sub(r'\s*\|\s*Lex Fridman Podcast.*$', '', guest_name)
             guest_name = re.sub(r'\s*#\d+\s*$', '', guest_name).strip()
             
-            # Create clean filename prefix: "486_Michael_Levin" or "Michael_Levin"
+            # Create clean filename prefix: "Lex_Fridman_486_Michael_Levin" or "Lex_Fridman_Michael_Levin"
             safe_guest = re.sub(r'[<>:"/\\|?*]', '', guest_name)
             safe_guest = re.sub(r'\s+', '_', safe_guest).strip('._')
             if episode_num:
-                file_prefix = f"{episode_num}_{safe_guest}"
+                file_prefix = f"Lex_Fridman_{episode_num}_{safe_guest}"
             else:
-                file_prefix = safe_guest
+                file_prefix = f"Lex_Fridman_{safe_guest}"
             
             # Create output directory with episode name
             os.makedirs(output_dir, exist_ok=True)
             
-            # File paths with episode names
+            # File paths with series and guest names
             txt_path = os.path.join(output_dir, f'{file_prefix}_transcript.txt')
             segments_path = os.path.join(output_dir, f'{file_prefix}_segments.json')
             metadata_path = os.path.join(output_dir, f'{file_prefix}_metadata.json')
