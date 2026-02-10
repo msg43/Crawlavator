@@ -299,6 +299,104 @@ class ArticleDownloader:
     def __init__(self, auth: EDUAuth):
         self.auth = auth
     
+    def _get_authenticated_session(self) -> requests.Session:
+        """Create a requests session with authenticated cookies"""
+        cookies = self.auth.get_cookies()
+        
+        session = requests.Session()
+        for cookie in cookies:
+            session.cookies.set(
+                cookie['name'],
+                cookie['value'],
+                domain=cookie.get('domain', ''),
+                path=cookie.get('path', '/')
+            )
+        
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        })
+        
+        return session
+    
+    def _download_article_fast(self, article_url: str, html_path: str, images_dir: str) -> bool:
+        """Fast article download using HTTP requests"""
+        session = self._get_authenticated_session()
+        
+        # Fetch page
+        response = session.get(article_url, timeout=15)
+        if response.status_code in [403, 404]:
+            return False
+        response.raise_for_status()
+        
+        # Parse and extract article
+        soup = BeautifulSoup(response.content, 'lxml')
+        article = soup.select_one('article, .blog-item, .post-content, main article')
+        if not article:
+            article = soup.select_one('main, .content')
+        if not article or len(article.get_text(strip=True)) < 200:
+            return False
+        
+        # Download images
+        os.makedirs(images_dir, exist_ok=True)
+        images = article.find_all('img')
+        
+        for img in images:
+            src = img.get('src') or img.get('data-src')
+            if not src or not src.startswith('http'):
+                continue
+            
+            try:
+                img_response = session.get(src, timeout=10)
+                if img_response.status_code == 200:
+                    filename = os.path.basename(urlparse(src).path) or 'image.jpg'
+                    img_path = os.path.join(images_dir, filename)
+                    with open(img_path, 'wb') as f:
+                        f.write(img_response.content)
+                    # Update src to local path
+                    img['src'] = f'images/{filename}'
+            except:
+                pass
+        
+        # Save HTML
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(str(article))
+        
+        return True
+    
+    def _download_transcript_fast(self, page_url: str, transcript_title: str) -> Optional[str]:
+        """Fast transcript download using HTTP requests instead of Playwright"""
+        session = self._get_authenticated_session()
+        
+        # Make fast HTTP request
+        response = session.get(page_url, timeout=15)
+        response.raise_for_status()
+        
+        # Parse HTML
+        soup = BeautifulSoup(response.content, 'lxml')
+        
+        # Try to find transcript content (same selectors as Playwright version)
+        content = None
+        selectors = [
+            '.accordion-content',
+            '[class*="accordion"] [class*="content"]',
+            '.sqs-block-content',
+            'article',
+            'main',
+            '.content'
+        ]
+        
+        for selector in selectors:
+            elements = soup.select(selector)
+            for elem in elements:
+                text = elem.get_text(separator='\n', strip=True)
+                if len(text) > 500:  # Reasonable transcript length
+                    content = text
+                    break
+            if content:
+                break
+        
+        return content
+    
     def download_article(self, article_url: str, output_dir: str,
                          skip_if_exists: bool = True) -> Tuple[bool, str]:
         os.makedirs(output_dir, exist_ok=True)
@@ -310,6 +408,15 @@ class ArticleDownloader:
             if os.path.getsize(html_path) > 1000:
                 return True, "Article already downloaded"
         
+        # OPTIMIZATION: Try fast HTTP request first for simple articles
+        try:
+            success = self._download_article_fast(article_url, html_path, images_dir)
+            if success:
+                return True, html_path
+        except Exception:
+            pass  # Fallback to Playwright
+        
+        # Fallback to Playwright for complex pages
         page = self.auth.get_page()
         
         try:
@@ -430,6 +537,18 @@ class ArticleDownloader:
             if os.path.getsize(txt_path) > 100:
                 return True, "Transcript already downloaded"
         
+        # OPTIMIZATION: Try fast HTTP request first, fallback to Playwright if needed
+        try:
+            content = self._download_transcript_fast(page_url, transcript_title)
+            if content and len(content) > 100:
+                with open(txt_path, 'w', encoding='utf-8') as f:
+                    f.write(f"# {transcript_title}\n\n{content}")
+                return True, txt_path
+        except Exception as e:
+            # Fast method failed, fallback to Playwright
+            pass
+        
+        # Fallback to Playwright for complex pages (accordions, JavaScript content)
         page = self.auth.get_page()
         
         try:

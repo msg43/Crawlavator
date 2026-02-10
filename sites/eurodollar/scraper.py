@@ -455,9 +455,9 @@ class EDUScraper:
         }
         
         try:
-            # Index video sections
+            # Index video sections (skip qna and weekly-recap per user request)
             video_sections = [
-                "the-basics", "classroom", "qna", "weekly-recap",
+                "the-basics", "classroom",
                 "presentations", "conversations", "guest-presentations",
                 "digitized", "youtube-adfree"
             ]
@@ -486,12 +486,12 @@ class EDUScraper:
                 if progress_callback:
                     progress_callback(f"Error indexing DDA: {str(e)}")
             
-            # Index Daily Briefings
-            try:
-                results["daily_briefing"] = self.index_daily_briefings(page, progress_callback)
-            except Exception as e:
-                if progress_callback:
-                    progress_callback(f"Error indexing daily briefings: {str(e)}")
+            # Index Daily Briefings - DISABLED per user request
+            # try:
+            #     results["daily_briefing"] = self.index_daily_briefings(page, progress_callback)
+            # except Exception as e:
+            #     if progress_callback:
+            #         progress_callback(f"Error indexing daily briefings: {str(e)}")
             
             # Index Transcripts
             try:

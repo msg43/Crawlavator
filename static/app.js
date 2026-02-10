@@ -44,6 +44,7 @@ const elements = {
     
     // Download
     downloadBtn: document.getElementById('download-btn'),
+    downloadNewBtn: document.getElementById('download-new-btn'),
     
     // Progress
     progressOverlay: document.getElementById('progress-overlay'),
@@ -63,7 +64,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadSites();
     await loadConfig();
     setupEventListeners();
+    
+    // Ensure backend knows the current site selection
+    await syncActiveSite();
 });
+
+// Helper to sync current dropdown selection with backend
+async function syncActiveSite() {
+    if (!currentSite) return;
+    
+    try {
+        await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ active_site: currentSite.id })
+        });
+        console.log('Backend synced to site:', currentSite.name);
+    } catch (error) {
+        console.error('Failed to sync active site:', error);
+    }
+}
 
 async function loadSites() {
     try {
@@ -115,6 +135,7 @@ function setupEventListeners() {
     
     // Download
     elements.downloadBtn.addEventListener('click', startDownload);
+    elements.downloadNewBtn.addEventListener('click', downloadAllNew);
     
     // Update login button on input
     elements.emailInput.addEventListener('input', updateLoginButton);
@@ -138,6 +159,8 @@ function debounce(func, wait) {
 async function onSiteChange() {
     const siteId = elements.siteSelect.value;
     currentSite = sites.find(s => s.id === siteId);
+    
+    console.log('Site changed to:', currentSite?.name, '(id:', siteId, ')');
     
     // Clear content
     contentItems = [];
@@ -245,7 +268,11 @@ async function loadConfig() {
         if (elements.siteSelect.value !== activeSite) {
             elements.siteSelect.value = activeSite;
         }
-        currentSite = sites.find(s => s.id === activeSite);
+        
+        // IMPORTANT: Update currentSite based on dropdown value
+        currentSite = sites.find(s => s.id === elements.siteSelect.value);
+        
+        console.log('Current site set to:', currentSite?.name, '(id:', elements.siteSelect.value, ')');
         updateSiteUI();
         
         // Load site-specific config for the CURRENT dropdown selection
@@ -409,9 +436,16 @@ async function manualLogin() {
 
 // Content Functions
 async function indexContent() {
+    if (!currentSite) {
+        showStatus('index', 'error', 'Please select a site first.');
+        return;
+    }
+    
+    console.log('Indexing content for site:', currentSite.name, '(id:', currentSite.id, ')');
+    
     elements.indexBtn.disabled = true;
     elements.indexBtn.textContent = 'Scanning...';
-    showStatus('index', 'info', 'Scanning content... This may take a minute.');
+    showStatus('index', 'info', `Scanning ${currentSite.name}... This may take a minute.`);
     
     try {
         const response = await fetch('/api/index-content', {
@@ -443,9 +477,11 @@ async function indexContent() {
         if (contentItems.length > 0) {
             elements.noContent.style.display = 'none';
             elements.contentTable.style.display = 'table';
+            elements.downloadNewBtn.disabled = false;
         } else {
             elements.noContent.style.display = 'block';
             elements.contentTable.style.display = 'none';
+            elements.downloadNewBtn.disabled = true;
         }
         
     } catch (error) {
@@ -593,6 +629,9 @@ async function startDownload() {
     };
     
     // Show progress
+    const progressTitle = document.getElementById('progress-modal-title');
+    if (progressTitle) progressTitle.textContent = 'Downloading...';
+    
     elements.progressOverlay.style.display = 'flex';
     elements.progressBar.style.width = '0%';
     elements.progressBar.textContent = '0%';
@@ -667,6 +706,98 @@ async function startDownload() {
     }
 }
 
+async function downloadAllNew() {
+    if (!currentSite || contentItems.length === 0) {
+        alert('Please scan content first before using "Download All New"');
+        return;
+    }
+    
+    // Get download directory from config
+    const downloadDir = elements.downloadDirInput.value.trim() || `./downloads/${currentSite.id}`;
+    
+    // Show progress
+    const progressTitle = document.getElementById('progress-modal-title');
+    if (progressTitle) progressTitle.textContent = 'Checking local content...';
+    
+    elements.progressOverlay.style.display = 'flex';
+    elements.progressBar.style.width = '0%';
+    elements.progressBar.textContent = 'Scanning...';
+    elements.progressText.textContent = 'Scanning local folder for existing content...';
+    elements.progressLog.innerHTML = '';
+    
+    try {
+        // Call backend to check what's new and download
+        const response = await fetch('/api/download-new', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                site_id: currentSite.id,
+                search_dir: downloadDir
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.error) {
+            logProgress('error', data.error);
+            elements.progressOverlay.style.display = 'none';
+            return;
+        }
+        
+        // Connect to SSE for progress
+        const eventSource = new EventSource(`/api/progress/${data.session_id}`);
+        
+        eventSource.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            
+            if (msg.type === 'status') {
+                elements.progressText.textContent = msg.message;
+                logProgress('info', msg.message);
+            } else if (msg.type === 'info') {
+                logProgress('info', msg.message);
+            } else if (msg.type === 'success') {
+                logProgress('success', msg.message);
+            } else if (msg.type === 'progress') {
+                elements.progressText.textContent = msg.message;
+                if (msg.percent) {
+                    elements.progressBar.style.width = `${msg.percent}%`;
+                    elements.progressBar.textContent = `${Math.round(msg.percent)}%`;
+                }
+            } else if (msg.type === 'warning') {
+                logProgress('warning', msg.message);
+            } else if (msg.type === 'error') {
+                logProgress('error', msg.message);
+                eventSource.close();
+                setTimeout(() => {
+                    elements.progressOverlay.style.display = 'none';
+                }, 3000);
+            } else if (msg.type === 'complete') {
+                logProgress('success', msg.message);
+                if (msg.summary) {
+                    logProgress('info', `Total indexed: ${msg.summary.indexed}`);
+                    logProgress('info', `Already had: ${msg.summary.local}`);
+                    logProgress('success', `Downloaded: ${msg.summary.downloaded}`);
+                }
+                eventSource.close();
+                
+                setTimeout(() => {
+                    elements.progressOverlay.style.display = 'none';
+                }, 5000);
+            }
+        };
+        
+        eventSource.onerror = () => {
+            logProgress('error', 'Connection lost');
+            eventSource.close();
+            elements.progressOverlay.style.display = 'none';
+        };
+        
+    } catch (error) {
+        logProgress('error', 'Error: ' + error.message);
+        elements.progressOverlay.style.display = 'none';
+    }
+}
+
 // Helpers
 function showStatus(section, type, message) {
     const statusEl = section === 'config' ? elements.configStatus : elements.indexStatus;
@@ -693,3 +824,382 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// ========================================
+// Tab Management
+// ========================================
+
+function setupTabs() {
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+    
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tabName = btn.getAttribute('data-tab');
+            
+            // Update active tab button
+            tabBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            // Show corresponding tab content
+            tabContents.forEach(content => {
+                if (content.getAttribute('data-tab') === tabName) {
+                    content.classList.add('active');
+                    content.style.display = 'block';
+                } else {
+                    content.classList.remove('active');
+                    content.style.display = 'none';
+                }
+            });
+            
+            // Load data for specific tabs
+            if (tabName === 'private-rss') {
+                loadPrivateFeeds();
+            } else if (tabName === 'sync') {
+                loadSyncFolder();
+            }
+        });
+    });
+}
+
+// Call setupTabs after DOM content loaded
+document.addEventListener('DOMContentLoaded', () => {
+    setupTabs();
+});
+
+// ========================================
+// Private RSS Feeds Management
+// ========================================
+
+async function loadPrivateFeeds() {
+    try {
+        const response = await fetch('/api/private-feeds');
+        const data = await response.json();
+        const feeds = data.feeds || [];
+        
+        const feedsList = document.getElementById('feeds-list');
+        const noFeeds = document.getElementById('no-feeds');
+        
+        if (feeds.length === 0) {
+            feedsList.innerHTML = '';
+            noFeeds.style.display = 'block';
+        } else {
+            noFeeds.style.display = 'none';
+            feedsList.innerHTML = feeds.map(feed => `
+                <div class="feed-item" data-feed-id="${escapeHtml(feed.id)}">
+                    <div class="feed-header">
+                        <div>
+                            <div class="feed-title">${escapeHtml(feed.name)}</div>
+                            ${feed.author ? `<div class="feed-author">by ${escapeHtml(feed.author)}</div>` : ''}
+                        </div>
+                        <div class="feed-actions">
+                            <button class="btn-icon delete" onclick="deletePrivateFeed('${escapeHtml(feed.id)}')">Delete</button>
+                        </div>
+                    </div>
+                    <div class="feed-url">${escapeHtml(feed.url)}</div>
+                    <div class="feed-meta">
+                        <span>Added: ${escapeHtml(feed.added_date || 'Unknown')}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+    } catch (error) {
+        console.error('Failed to load private feeds:', error);
+        showStatus('add-feed-status', 'Failed to load feeds: ' + error.message, 'error');
+    }
+}
+
+async function addPrivateFeed() {
+    const nameInput = document.getElementById('feed-name');
+    const urlInput = document.getElementById('feed-url');
+    const authorInput = document.getElementById('feed-author');
+    const statusDiv = document.getElementById('add-feed-status');
+    
+    const name = nameInput.value.trim();
+    const url = urlInput.value.trim();
+    const author = authorInput.value.trim();
+    
+    if (!name || !url) {
+        showStatus('add-feed-status', 'Please enter both feed name and URL', 'error');
+        return;
+    }
+    
+    try {
+        showStatus('add-feed-status', 'Validating RSS feed...', 'info');
+        
+        const response = await fetch('/api/private-feeds', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, url, author })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showStatus('add-feed-status', '✓ Feed added successfully!', 'success');
+            nameInput.value = '';
+            urlInput.value = '';
+            authorInput.value = '';
+            loadPrivateFeeds();
+        } else {
+            showStatus('add-feed-status', data.error || 'Failed to add feed', 'error');
+        }
+    } catch (error) {
+        showStatus('add-feed-status', 'Error: ' + error.message, 'error');
+    }
+}
+
+async function deletePrivateFeed(feedId) {
+    if (!confirm('Are you sure you want to delete this feed?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/private-feeds/${feedId}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            loadPrivateFeeds();
+        } else {
+            const data = await response.json();
+            alert('Failed to delete feed: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('Error: ' + error.message);
+    }
+}
+
+// Setup private RSS feed event listeners
+document.addEventListener('DOMContentLoaded', () => {
+    const addFeedBtn = document.getElementById('add-feed-btn');
+    if (addFeedBtn) {
+        addFeedBtn.addEventListener('click', addPrivateFeed);
+    }
+});
+
+// ========================================
+// Sync All Sources
+// ========================================
+
+async function startSync() {
+    const startSyncBtn = document.getElementById('start-sync-btn');
+    const syncStatus = document.getElementById('sync-status');
+    const syncResults = document.getElementById('sync-results');
+    const syncFolder = document.getElementById('sync-folder');
+    
+    // Get the folder to check
+    const searchDir = syncFolder.value.trim() || './downloads';
+    
+    // Save folder for next time
+    saveSyncFolder(searchDir);
+    
+    startSyncBtn.disabled = true;
+    syncResults.style.display = 'none';
+    
+    // Show progress overlay (same as download progress)
+    const progressTitle = document.getElementById('progress-modal-title');
+    if (progressTitle) progressTitle.textContent = 'Syncing All Sources...';
+    
+    elements.progressOverlay.style.display = 'flex';
+    elements.progressBar.style.width = '0%';
+    elements.progressBar.textContent = 'Starting...';
+    elements.progressText.textContent = 'Initializing sync...';
+    elements.progressLog.innerHTML = '';
+    
+    try {
+        const response = await fetch('/api/sync-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                search_dir: searchDir
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.error) {
+            logProgress('error', data.error);
+            elements.progressOverlay.style.display = 'none';
+            showStatus('sync-status', data.error, 'error');
+            startSyncBtn.disabled = false;
+            return;
+        }
+        
+        // Connect to SSE for progress updates
+        const eventSource = new EventSource(`/api/progress/${data.session_id}`);
+        
+        eventSource.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            
+            if (msg.type === 'status') {
+                elements.progressText.textContent = msg.message;
+                logProgress('info', msg.message);
+                
+                // Update progress bar based on source progress
+                if (msg.source_progress && msg.total_sources) {
+                    const percent = (msg.source_progress / msg.total_sources) * 100;
+                    elements.progressBar.style.width = `${percent}%`;
+                    elements.progressBar.textContent = `${Math.round(percent)}%`;
+                }
+            } else if (msg.type === 'info') {
+                logProgress('info', msg.message);
+            } else if (msg.type === 'success') {
+                logProgress('success', msg.message);
+            } else if (msg.type === 'progress') {
+                elements.progressText.textContent = msg.message;
+                if (msg.percent) {
+                    elements.progressBar.style.width = `${msg.percent}%`;
+                    elements.progressBar.textContent = `${Math.round(msg.percent)}%`;
+                }
+            } else if (msg.type === 'warning') {
+                logProgress('warning', msg.message);
+            } else if (msg.type === 'error') {
+                logProgress('error', msg.message);
+                eventSource.close();
+                elements.progressOverlay.style.display = 'none';
+                showStatus('sync-status', msg.message, 'error');
+                startSyncBtn.disabled = false;
+            } else if (msg.type === 'complete') {
+                logProgress('success', msg.message);
+                eventSource.close();
+                
+                // Hide progress overlay after a brief delay
+                setTimeout(() => {
+                    elements.progressOverlay.style.display = 'none';
+                }, 2000);
+                
+                // Display results
+                if (msg.results) {
+                    displaySyncResults(msg.results);
+                    showStatus('sync-status', `✓ Sync completed! Scanned folder: ${searchDir}`, 'success');
+                }
+                
+                startSyncBtn.disabled = false;
+            }
+        };
+        
+        eventSource.onerror = (error) => {
+            console.error('SSE Error:', error);
+            eventSource.close();
+            elements.progressOverlay.style.display = 'none';
+            showStatus('sync-status', 'Connection error during sync', 'error');
+            startSyncBtn.disabled = false;
+        };
+        
+    } catch (error) {
+        elements.progressOverlay.style.display = 'none';
+        showStatus('sync-status', 'Error: ' + error.message, 'error');
+        startSyncBtn.disabled = false;
+    }
+}
+
+function displaySyncResults(results) {
+    const syncResults = document.getElementById('sync-results');
+    const syncSummary = document.getElementById('sync-summary');
+    
+    if (!results.details || results.details.length === 0) {
+        syncSummary.innerHTML = `
+            <div class="empty-state">
+                <p><strong>No sources were found or all sources failed to index.</strong></p>
+                <p>This could happen if:</p>
+                <ul style="text-align: left; margin: 1rem 0;">
+                    <li>Network connection issues prevented fetching RSS feeds</li>
+                    <li>All podcast sites are temporarily unavailable</li>
+                </ul>
+                <p>Try again in a few minutes.</p>
+            </div>
+        `;
+        syncResults.style.display = 'block';
+        return;
+    }
+    
+    let totalDownloaded = 0;
+    let totalSkipped = 0;
+    let totalErrors = 0;
+    
+    const itemsHtml = results.details.map(source => {
+        const downloadedCount = source.downloaded || 0;
+        const downloadErrors = source.download_errors || 0;
+        totalDownloaded += downloadedCount;
+        totalSkipped += (source.local || 0);
+        totalErrors += downloadErrors;
+        
+        let statusText = '';
+        if (downloadedCount > 0) {
+            statusText = `✓ ${downloadedCount} downloaded`;
+            if (downloadErrors > 0) {
+                statusText += ` (${downloadErrors} errors)`;
+            }
+        } else if (source.error) {
+            statusText = `❌ Error: ${source.error}`;
+        } else {
+            statusText = 'Up to date';
+        }
+        
+        return `
+            <div class="sync-item ${downloadedCount > 0 ? 'has-new' : 'no-new'}">
+                <span class="sync-item-source">${escapeHtml(source.source_name)}</span>
+                <span class="sync-item-count">${statusText}</span>
+            </div>
+        `;
+    }).join('');
+    
+    syncSummary.innerHTML = `
+        ${itemsHtml}
+        <div class="sync-totals">
+            <div class="sync-total-item">
+                <span class="sync-total-value">${totalDownloaded}</span>
+                <span class="sync-total-label">Downloaded</span>
+            </div>
+            <div class="sync-total-item">
+                <span class="sync-total-value">${totalSkipped}</span>
+                <span class="sync-total-label">Already Had</span>
+            </div>
+            <div class="sync-total-item">
+                <span class="sync-total-value">${totalErrors}</span>
+                <span class="sync-total-label">Errors</span>
+            </div>
+        </div>
+    `;
+    
+    syncResults.style.display = 'block';
+}
+
+// Load saved sync folder on tab switch
+function loadSyncFolder() {
+    const syncFolder = document.getElementById('sync-folder');
+    if (syncFolder) {
+        // Load from localStorage
+        const savedFolder = localStorage.getItem('crawlavator_sync_folder');
+        if (savedFolder) {
+            syncFolder.value = savedFolder;
+        }
+    }
+}
+
+// Save sync folder to localStorage
+function saveSyncFolder(folder) {
+    if (folder && folder.trim()) {
+        localStorage.setItem('crawlavator_sync_folder', folder.trim());
+    }
+}
+
+// Setup sync event listeners
+document.addEventListener('DOMContentLoaded', () => {
+    const startSyncBtn = document.getElementById('start-sync-btn');
+    if (startSyncBtn) {
+        startSyncBtn.addEventListener('click', startSync);
+    }
+    
+    const viewLogBtn = document.getElementById('view-sync-log-btn');
+    if (viewLogBtn) {
+        viewLogBtn.addEventListener('click', () => {
+            // Open log file in new window or download
+            window.open('/downloads/sync_log.jsonl', '_blank');
+        });
+    }
+    
+    // Load saved folder when page loads
+    loadSyncFolder();
+});

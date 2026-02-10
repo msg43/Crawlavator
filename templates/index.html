@@ -79,8 +79,15 @@
             <div id="config-status" class="status-message"></div>
         </section>
 
+        <!-- Tab Navigation -->
+        <div class="tab-navigation">
+            <button class="tab-btn active" data-tab="content">Content</button>
+            <button class="tab-btn" data-tab="private-rss">Private RSS Feeds</button>
+            <button class="tab-btn" data-tab="sync">Sync All</button>
+        </div>
+
         <!-- Content Section -->
-        <section class="content-section card" id="content-section" style="display: none;">
+        <section class="content-section card tab-content active" id="content-section" data-tab="content" style="display: none;">
             <div class="section-header">
                 <h2>Available Content</h2>
                 <div class="content-controls">
@@ -139,20 +146,104 @@
                 <p>No content found. Click "Scan Content" to index available content.</p>
             </div>
             
-            <button class="btn btn-primary btn-large" id="download-btn" disabled>
-                Download Selected Content
-            </button>
+            <div style="display: flex; gap: 1rem; justify-content: center; margin-top: 1rem;">
+                <button class="btn btn-primary btn-large" id="download-btn" disabled>
+                    Download Selected
+                </button>
+                <button class="btn btn-secondary btn-large" id="download-new-btn" disabled>
+                    Download All New
+                </button>
+            </div>
         </section>
 
+
+        <!-- Private RSS Feeds Section -->
+        <section class="private-rss-section card tab-content" id="private-rss-section" data-tab="private-rss" style="display: none;">
+            <h2>Private RSS Feeds</h2>
+
+            <!-- Add Feed Form -->
+            <div class="add-feed-form">
+                <h3>Add New Private Feed</h3>
+                <div class="form-group">
+                    <label for="feed-name">Feed Name *</label>
+                    <input type="text" id="feed-name" placeholder="e.g., Making Sense with Sam Harris">
+                </div>
+                <div class="form-group">
+                    <label for="feed-url">RSS Feed URL *</label>
+                    <input type="url" id="feed-url" placeholder="https://...your-private-rss-url...">
+                    <small>Paste your private RSS feed URL (from Sam Harris, Patreon, Supercast, etc.)</small>
+                </div>
+                <div class="form-group">
+                    <label for="feed-author">Author/Creator (Optional)</label>
+                    <input type="text" id="feed-author" placeholder="e.g., Sam Harris">
+                </div>
+                <button class="btn btn-primary" id="add-feed-btn">Add Feed</button>
+                <div id="add-feed-status" class="status-message"></div>
+            </div>
+
+            <!-- Existing Feeds List -->
+            <div class="existing-feeds">
+                <h3>Your Private Feeds</h3>
+                <div id="feeds-list" class="feeds-list">
+                    <!-- Will be populated dynamically -->
+                </div>
+                <div id="no-feeds" class="empty-state" style="display: none;">
+                    <p>No private RSS feeds added yet. Add one above to get started.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Sync All Section -->
+        <section class="sync-section card tab-content" id="sync-section" data-tab="sync" style="display: none;">
+            <h2>Sync All Sources</h2>
+            <p>Automatically check all sources (including Private RSS Feeds) for new content and download only what's missing.</p>
+            
+            <div class="info-box" style="background: rgba(212, 168, 83, 0.1); border-left: 4px solid var(--accent); padding: 1rem; margin-bottom: 1.5rem; border-radius: 6px;">
+                <strong>🚀 How it works:</strong>
+                <ol style="margin: 0.5rem 0 0 1.5rem; line-height: 1.8;">
+                    <li>Automatically indexes <strong>all podcast sources</strong> including your Private RSS Feeds</li>
+                    <li>Scans your local folder recursively for existing episodes</li>
+                    <li>Downloads only what's missing to <code>[folder]/[Podcast Name]/</code></li>
+                    <li>Creates new folders automatically for podcasts you've never downloaded before</li>
+                    <li>Shows you a summary of what was downloaded</li>
+                </ol>
+            </div>
+            
+            <div class="sync-controls">
+                <div class="form-group">
+                    <label for="sync-folder">Top-Level Folder to Check</label>
+                    <input type="text" id="sync-folder" placeholder="~/Downloads/podcasts or ./downloads">
+                    <small>The app will recursively check ALL subfolders under this path for existing content</small>
+                </div>
+                <div class="sync-options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="sync-all-checkbox" checked>
+                        <span>Include all enabled sources</span>
+                    </label>
+                </div>
+                <button class="btn btn-primary btn-large" id="start-sync-btn">Start Sync</button>
+            </div>
+
+            <div id="sync-status" class="status-message"></div>
+
+            <!-- Sync Results (shown after completion) -->
+            <div id="sync-results" class="sync-results" style="display: none;">
+                <h3>Sync Results</h3>
+                <div class="sync-summary" id="sync-summary">
+                    <!-- Will be populated after sync -->
+                </div>
+                <button class="btn btn-secondary" id="view-sync-log-btn">View Log</button>
+            </div>
+        </section>
 
         <!-- Progress Overlay -->
         <div class="progress-overlay" id="progress-overlay" style="display: none;">
             <div class="progress-modal">
-                <h2>Downloading...</h2>
+                <h2 id="progress-modal-title">Processing...</h2>
                 <div class="progress-bar-container">
                     <div class="progress-bar" id="progress-bar"></div>
                 </div>
-                <p class="progress-text" id="progress-text">Preparing download...</p>
+                <p class="progress-text" id="progress-text">Preparing...</p>
                 <div class="progress-log" id="progress-log"></div>
             </div>
         </div>

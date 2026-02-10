@@ -14,13 +14,28 @@ from flask import Flask, render_template, request, jsonify, Response
 from sites import list_sites, get_site, ContentItem
 from sites.eurodollar import EurodollarSite
 from sites.lexfridman import LexFridmanSite
+from sites.conversationswithtyler import ConversationsWithTylerSite
+from sites.private_rss import PrivateRSSSite
+from sites.invest_like_best import InvestLikeBestSite
+from sites.macrovoices import MacroVoicesSite
+from sites.peter_zeihan import PeterZeihanSite
+from sites.ezra_klein import EzraKleinSite
+from sites.odd_lots import OddLotsSite
+from sites.hidden_forces import HiddenForcesSite
+from sites.excess_returns import ExcessReturnsSite
+from sites.dwarkesh import DwarkeshSite
+from sites.fareed_zakaria import FareedZakariaSite
+from sites.bigthink import BigThinkSite
 from shared import DownloadManager
+from shared.sync_manager import SyncManager
+import feedparser
 
 app = Flask(__name__)
 
 # Configuration
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 DEFAULT_DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
+PRIVATE_FEEDS_FILE = os.path.join(os.path.dirname(__file__), '.private', 'rss_feeds.json')
 
 # Delays between operations
 DOWNLOAD_DELAY = 1
@@ -279,6 +294,36 @@ def get_content():
     })
 
 
+@app.route('/api/download-new', methods=['POST'])
+def download_new():
+    """Download only new items for a single site (not already local)"""
+    try:
+        data = request.json or {}
+        site_id = data.get('site_id')
+        search_dir = data.get('search_dir', DEFAULT_DOWNLOADS_DIR)
+        
+        if not site_id:
+            return jsonify({'error': 'No site_id provided'}), 400
+        
+        # Create session ID
+        import uuid
+        session_id = str(uuid.uuid4())
+        progress_queues[session_id] = queue.Queue()
+        
+        # Start download in background
+        thread = threading.Thread(
+            target=download_new_worker,
+            args=(session_id, site_id, search_dir)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({'session_id': session_id})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/download', methods=['POST'])
 def start_download():
     """Start downloading selected items"""
@@ -315,6 +360,109 @@ def start_download():
     thread.start()
     
     return jsonify({'session_id': session_id})
+
+
+def download_new_worker(session_id, site_id, search_dir):
+    """Background worker for downloading only new items"""
+    import time as time_module
+    q = progress_queues.get(session_id)
+    if not q:
+        return
+    
+    try:
+        q.put({'type': 'status', 'message': 'Getting indexed content...'})
+        
+        # Get indexed content for this site
+        if site_id not in indexed_content or not indexed_content[site_id]:
+            q.put({'type': 'error', 'message': 'No indexed content found. Please scan content first.'})
+            return
+        
+        items = indexed_content[site_id]
+        
+        # Use SyncManager to find what's already local
+        q.put({'type': 'status', 'message': f'Scanning {search_dir} for existing content...'})
+        sync_manager = SyncManager(DEFAULT_DOWNLOADS_DIR)
+        
+        site = get_site_instance(site_id)
+        if not site:
+            q.put({'type': 'error', 'message': 'Site not found'})
+            return
+        
+        site_name = site.SITE_NAME
+        sync_result = sync_manager.sync_source(site_id, site_name, items, search_dir)
+        
+        new_items = sync_result.get('new_items_full', [])
+        
+        q.put({
+            'type': 'info',
+            'message': f'Found {sync_result["indexed"]} episodes total'
+        })
+        q.put({
+            'type': 'info',
+            'message': f'Already have {sync_result["local"]} episodes locally'
+        })
+        q.put({
+            'type': 'success',
+            'message': f'Will download {len(new_items)} new episodes'
+        })
+        
+        if not new_items:
+            q.put({
+                'type': 'complete',
+                'message': '✓ Everything is up to date!',
+                'summary': {
+                    'indexed': sync_result['indexed'],
+                    'local': sync_result['local'],
+                    'downloaded': 0
+                }
+            })
+            return
+        
+        # Create site-specific folder
+        site_folder = os.path.join(os.path.expanduser(search_dir), site_name)
+        os.makedirs(site_folder, exist_ok=True)
+        
+        # Download new items
+        downloaded_count = 0
+        download_errors = 0
+        
+        for item_idx, item in enumerate(new_items, 1):
+            try:
+                q.put({
+                    'type': 'progress',
+                    'message': f'[{item_idx}/{len(new_items)}] {item.title[:50]}...',
+                    'percent': (item_idx / len(new_items)) * 100
+                })
+                
+                site.download_item(item, site_folder)
+                downloaded_count += 1
+                
+            except Exception as e:
+                q.put({
+                    'type': 'warning',
+                    'message': f'⚠️ Error: {item.title[:30]}: {str(e)[:50]}'
+                })
+                download_errors += 1
+        
+        # Send completion message
+        q.put({
+            'type': 'complete',
+            'message': f'✓ Downloaded {downloaded_count} new episodes!',
+            'summary': {
+                'indexed': sync_result['indexed'],
+                'local': sync_result['local'],
+                'downloaded': downloaded_count,
+                'errors': download_errors
+            }
+        })
+        
+    except Exception as e:
+        q.put({'type': 'error', 'message': f'Error: {str(e)}'})
+    
+    finally:
+        time_module.sleep(2)
+        if session_id in progress_queues:
+            del progress_queues[session_id]
 
 
 def download_worker(session_id, item_ids, options, site_id):
@@ -476,6 +624,573 @@ def progress(session_id):
                 yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
     
     return Response(generate(), mimetype='text/event-stream')
+
+
+@app.route('/api/private-feeds', methods=['GET'])
+def get_private_feeds():
+    """Get all private RSS feeds"""
+    try:
+        if os.path.exists(PRIVATE_FEEDS_FILE):
+            with open(PRIVATE_FEEDS_FILE, 'r') as f:
+                data = json.load(f)
+                return jsonify(data)
+        return jsonify({'feeds': []})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/private-feeds', methods=['POST'])
+def add_private_feed():
+    """Add a new private RSS feed"""
+    try:
+        data = request.json
+        
+        # Validate required fields
+        if not data.get('name') or not data.get('url'):
+            return jsonify({'error': 'Name and URL are required'}), 400
+        
+        # Validate RSS feed URL
+        try:
+            feed = feedparser.parse(data['url'])
+            if not feed.entries:
+                return jsonify({'error': 'Invalid RSS feed or no episodes found'}), 400
+        except Exception as e:
+            return jsonify({'error': f'Failed to parse RSS feed: {str(e)}'}), 400
+        
+        # Load existing feeds
+        feeds_data = {'feeds': []}
+        if os.path.exists(PRIVATE_FEEDS_FILE):
+            with open(PRIVATE_FEEDS_FILE, 'r') as f:
+                feeds_data = json.load(f)
+        
+        # Generate unique ID
+        feed_id = data['name'].lower().replace(' ', '_').replace('-', '_')
+        feed_id = ''.join(c for c in feed_id if c.isalnum() or c == '_')
+        
+        # Check for duplicate ID
+        existing_ids = [f['id'] for f in feeds_data['feeds']]
+        if feed_id in existing_ids:
+            counter = 1
+            while f"{feed_id}_{counter}" in existing_ids:
+                counter += 1
+            feed_id = f"{feed_id}_{counter}"
+        
+        # Create feed entry
+        new_feed = {
+            'id': feed_id,
+            'name': data['name'],
+            'url': data['url'],
+            'author': data.get('author', ''),
+            'added_date': time.strftime('%Y-%m-%d')
+        }
+        
+        feeds_data['feeds'].append(new_feed)
+        
+        # Save to file
+        os.makedirs(os.path.dirname(PRIVATE_FEEDS_FILE), exist_ok=True)
+        with open(PRIVATE_FEEDS_FILE, 'w') as f:
+            json.dump(feeds_data, f, indent=2)
+        
+        return jsonify({'success': True, 'feed': new_feed})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/private-feeds/<feed_id>', methods=['DELETE'])
+def delete_private_feed(feed_id):
+    """Delete a private RSS feed"""
+    try:
+        if not os.path.exists(PRIVATE_FEEDS_FILE):
+            return jsonify({'error': 'No feeds found'}), 404
+        
+        with open(PRIVATE_FEEDS_FILE, 'r') as f:
+            feeds_data = json.load(f)
+        
+        # Filter out the feed to delete
+        original_count = len(feeds_data['feeds'])
+        feeds_data['feeds'] = [f for f in feeds_data['feeds'] if f['id'] != feed_id]
+        
+        if len(feeds_data['feeds']) == original_count:
+            return jsonify({'error': 'Feed not found'}), 404
+        
+        # Save updated list
+        with open(PRIVATE_FEEDS_FILE, 'w') as f:
+            json.dump(feeds_data, f, indent=2)
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/private-feeds/<feed_id>', methods=['PUT'])
+def update_private_feed(feed_id):
+    """Update a private RSS feed"""
+    try:
+        data = request.json
+        
+        if not os.path.exists(PRIVATE_FEEDS_FILE):
+            return jsonify({'error': 'No feeds found'}), 404
+        
+        with open(PRIVATE_FEEDS_FILE, 'r') as f:
+            feeds_data = json.load(f)
+        
+        # Find and update the feed
+        feed_found = False
+        for feed in feeds_data['feeds']:
+            if feed['id'] == feed_id:
+                feed_found = True
+                if 'name' in data:
+                    feed['name'] = data['name']
+                if 'url' in data:
+                    # Validate new URL
+                    try:
+                        test_feed = feedparser.parse(data['url'])
+                        if not test_feed.entries:
+                            return jsonify({'error': 'Invalid RSS feed'}), 400
+                    except:
+                        return jsonify({'error': 'Failed to parse RSS feed'}), 400
+                    feed['url'] = data['url']
+                if 'author' in data:
+                    feed['author'] = data['author']
+                break
+        
+        if not feed_found:
+            return jsonify({'error': 'Feed not found'}), 404
+        
+        # Save updated list
+        with open(PRIVATE_FEEDS_FILE, 'w') as f:
+            json.dump(feeds_data, f, indent=2)
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/sync-all', methods=['POST'])
+def sync_all_sources():
+    """Start sync all sources in background with progress updates"""
+    try:
+        data = request.json or {}
+        search_dir = data.get('search_dir', DEFAULT_DOWNLOADS_DIR)
+        
+        # Create session ID
+        import uuid
+        session_id = str(uuid.uuid4())
+        progress_queues[session_id] = queue.Queue()
+        
+        # Start sync in background
+        thread = threading.Thread(
+            target=sync_all_worker,
+            args=(session_id, search_dir)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({'session_id': session_id})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def sync_all_worker(session_id, search_dir):
+    """Background worker for sync all operation"""
+    import time as time_module
+    q = progress_queues.get(session_id)
+    if not q:
+        return
+    
+    try:
+        start_time = time_module.time()
+        
+        # Get all available sites
+        available_sites = list_sites()
+        
+        # Move Eurodollar University to the end (it's slow, so process it last)
+        eurodollar_site = None
+        other_sites = []
+        for site in available_sites:
+            if site['id'] == 'eurodollar':
+                eurodollar_site = site
+            else:
+                other_sites.append(site)
+        
+        if eurodollar_site:
+            available_sites = other_sites + [eurodollar_site]
+        
+        sync_manager = SyncManager(DEFAULT_DOWNLOADS_DIR)
+        
+        results = {
+            'sources_checked': 0,
+            'new_items': 0,
+            'skipped': 0,
+            'errors': 0,
+            'details': [],
+            'search_dir': search_dir
+        }
+        
+        total_sites = len(available_sites)
+        failed_sites = []  # Track sites that failed or timed out for retry
+        
+        q.put({
+            'type': 'status',
+            'message': f'Starting sync for {total_sites} sources...'
+        })
+        
+        # Sync each site - automatically index if needed
+        for idx, site_info in enumerate(available_sites, 1):
+            site_id = site_info['id']
+            site_name = site_info['name']
+            channel_start_time = time_module.time()
+            
+            q.put({
+                'type': 'status',
+                'message': f'[{idx}/{total_sites}] Processing {site_name}...',
+                'current_source': site_name,
+                'source_progress': idx,
+                'total_sources': total_sites
+            })
+            
+            try:
+                # Get site instance
+                site = get_site_instance(site_id)
+                if not site:
+                    continue
+                
+                # Automatically index content for this site if not already indexed
+                items = []
+                if site_id in indexed_content and indexed_content[site_id]:
+                    # Use cached index
+                    items = indexed_content[site_id]
+                    q.put({
+                        'type': 'info',
+                        'message': f'  Using cached index ({len(items)} episodes)'
+                    })
+                else:
+                    # Auto-index this source
+                    q.put({
+                        'type': 'info',
+                        'message': f'  Indexing {site_name}...'
+                    })
+                    
+                    try:
+                        items = site.index_content(progress_callback=lambda msg: q.put({
+                            'type': 'info',
+                            'message': f'    {msg}'
+                        }))
+                        # Cache it for future use
+                        indexed_content[site_id] = items
+                        q.put({
+                            'type': 'info',
+                            'message': f'  ✓ Indexed {len(items)} episodes'
+                        })
+                    except Exception as e:
+                        q.put({
+                            'type': 'error',
+                            'message': f'  Failed to index {site_name}: {e}'
+                        })
+                        continue
+                
+                if items:
+                    # Sync this source with user-specified search directory
+                    sync_result = sync_manager.sync_source(site_id, site_name, items, search_dir)
+                    
+                    # Download new items
+                    new_items_to_download = sync_result.get('new_items_full', [])
+                    downloaded_count = 0
+                    download_errors = 0
+                    
+                    if new_items_to_download:
+                        # For Private RSS, create individual feed folders; for others, use site name
+                        if site_id == 'private_rss':
+                            # Group items by feed (subcategory)
+                            items_by_feed = {}
+                            for item in new_items_to_download:
+                                feed_name = item.subcategory or 'Unknown Feed'
+                                if feed_name not in items_by_feed:
+                                    items_by_feed[feed_name] = []
+                                items_by_feed[feed_name].append(item)
+                            
+                            # Download each feed to its own folder
+                            for feed_name, feed_items in items_by_feed.items():
+                                feed_folder = os.path.join(os.path.expanduser(search_dir), feed_name)
+                                os.makedirs(feed_folder, exist_ok=True)
+                                
+                                for item_idx, item in enumerate(feed_items, 1):
+                                    # Check timeout
+                                    if time_module.time() - channel_start_time > 60 and downloaded_count == 0:
+                                        q.put({
+                                            'type': 'warning',
+                                            'message': f'  ⏱️ Timeout: {site_name} stuck for 60s. Skipping for now...'
+                                        })
+                                        failed_sites.append({
+                                            'site_info': site_info,
+                                            'reason': 'timeout',
+                                            'items': items,
+                                            'sync_result': sync_result
+                                        })
+                                        break
+                                    
+                                    try:
+                                        q.put({
+                                            'type': 'progress',
+                                            'message': f'  [{downloaded_count + 1}/{len(new_items_to_download)}] {feed_name}: {item.title[:30]}...',
+                                            'percent': ((downloaded_count + 1) / len(new_items_to_download)) * 100
+                                        })
+                                        
+                                        site.download_item(item, feed_folder)
+                                        downloaded_count += 1
+                                        channel_start_time = time_module.time()
+                                        
+                                    except Exception as e:
+                                        q.put({
+                                            'type': 'warning',
+                                            'message': f'  ⚠️ Error: {item.title[:30]}: {str(e)[:50]}'
+                                        })
+                                        download_errors += 1
+                                        
+                                        if download_errors > 3 and downloaded_count == 0:
+                                            q.put({
+                                                'type': 'warning',
+                                                'message': f'  Multiple errors for {site_name}. Skipping remaining...'
+                                            })
+                                            failed_sites.append({
+                                                'site_info': site_info,
+                                                'reason': 'multiple_errors',
+                                                'items': items,
+                                                'sync_result': sync_result
+                                            })
+                                            break
+                            
+                            # Skip the normal download loop for private RSS
+                            new_items_to_download = []
+                        else:
+                            # Create site-specific folder in the search directory
+                            site_folder = os.path.join(os.path.expanduser(search_dir), site_name)
+                            os.makedirs(site_folder, exist_ok=True)
+                        
+                        q.put({
+                            'type': 'info',
+                            'message': f'  📥 Downloading {len(new_items_to_download)} new episodes...'
+                        })
+                        
+                        for item_idx, item in enumerate(new_items_to_download, 1):
+                            # Check if this channel has been stuck for 60 seconds
+                            if time_module.time() - channel_start_time > 60 and downloaded_count == 0:
+                                q.put({
+                                    'type': 'warning',
+                                    'message': f'  ⏱️ Timeout: {site_name} stuck for 60s with no downloads. Skipping for now...'
+                                })
+                                failed_sites.append({
+                                    'site_info': site_info,
+                                    'reason': 'timeout',
+                                    'items': items,
+                                    'sync_result': sync_result
+                                })
+                                break
+                            
+                            try:
+                                # Download the item
+                                q.put({
+                                    'type': 'progress',
+                                    'message': f'  [{item_idx}/{len(new_items_to_download)}] {item.title[:40]}...',
+                                    'percent': (item_idx / len(new_items_to_download)) * 100
+                                })
+                                
+                                site.download_item(item, site_folder)
+                                downloaded_count += 1
+                                channel_start_time = time_module.time()  # Reset timer on successful download
+                                
+                            except Exception as e:
+                                q.put({
+                                    'type': 'warning',
+                                    'message': f'  ⚠️ Error: {item.title[:30]}: {str(e)[:50]}'
+                                })
+                                download_errors += 1
+                                
+                                # If all downloads are failing, might be a systemic issue with this channel
+                                if download_errors > 3 and downloaded_count == 0:
+                                    q.put({
+                                        'type': 'warning',
+                                        'message': f'  Multiple errors for {site_name}. Skipping remaining items for now...'
+                                    })
+                                    failed_sites.append({
+                                        'site_info': site_info,
+                                        'reason': 'multiple_errors',
+                                        'items': items,
+                                        'sync_result': sync_result
+                                    })
+                                    break
+                        
+                        q.put({
+                            'type': 'success',
+                            'message': f'  ✓ {site_name}: Downloaded {downloaded_count} episodes'
+                        })
+                    else:
+                        q.put({
+                            'type': 'info',
+                            'message': f'  ✓ {site_name}: Up to date (no new episodes)'
+                        })
+                    
+                    # Update results
+                    sync_result_summary = {
+                        'source': sync_result['source'],
+                        'source_name': sync_result['source_name'],
+                        'indexed': sync_result['indexed'],
+                        'local': sync_result['local'],
+                        'new': sync_result['new'],
+                        'downloaded': downloaded_count,
+                        'download_errors': download_errors,
+                        'new_items_preview': sync_result.get('new_items_preview', [])
+                    }
+                    
+                    results['details'].append(sync_result_summary)
+                    results['sources_checked'] += 1
+                    results['new_items'] += downloaded_count
+                    results['skipped'] += sync_result['local']
+                    results['errors'] += download_errors
+                    
+            except Exception as e:
+                q.put({
+                    'type': 'error',
+                    'message': f'  ❌ Error syncing {site_name}: {str(e)}'
+                })
+                results['errors'] += 1
+                results['details'].append({
+                    'source': site_id,
+                    'source_name': site_name,
+                    'error': str(e)
+                })
+                failed_sites.append({
+                    'site_info': site_info,
+                    'reason': 'exception',
+                    'error': str(e)
+                })
+        
+        # Retry failed sites
+        if failed_sites:
+            q.put({
+                'type': 'status',
+                'message': f'\n🔄 Retrying {len(failed_sites)} failed sources...'
+            })
+            
+            for retry_idx, failed_site in enumerate(failed_sites, 1):
+                site_info = failed_site['site_info']
+                site_id = site_info['id']
+                site_name = site_info['name']
+                
+                q.put({
+                    'type': 'status',
+                    'message': f'[Retry {retry_idx}/{len(failed_sites)}] Retrying {site_name}...'
+                })
+                
+                try:
+                    site = get_site_instance(site_id)
+                    if not site:
+                        continue
+                    
+                    # If we have cached items and sync_result, use them
+                    if 'items' in failed_site and 'sync_result' in failed_site:
+                        items = failed_site['items']
+                        sync_result = failed_site['sync_result']
+                        new_items_to_download = sync_result.get('new_items_full', [])
+                        
+                        if new_items_to_download:
+                            site_folder = os.path.join(os.path.expanduser(search_dir), site_name)
+                            os.makedirs(site_folder, exist_ok=True)
+                            
+                            downloaded_count = 0
+                            download_errors = 0
+                            channel_start_time = time_module.time()
+                            
+                            for item_idx, item in enumerate(new_items_to_download, 1):
+                                # Timeout check for retry too
+                                if time_module.time() - channel_start_time > 60 and downloaded_count == 0:
+                                    q.put({
+                                        'type': 'error',
+                                        'message': f'  ❌ {site_name} still timing out. Giving up.'
+                                    })
+                                    break
+                                
+                                try:
+                                    q.put({
+                                        'type': 'progress',
+                                        'message': f'  [{item_idx}/{len(new_items_to_download)}] {item.title[:40]}...',
+                                        'percent': (item_idx / len(new_items_to_download)) * 100
+                                    })
+                                    
+                                    site.download_item(item, site_folder)
+                                    downloaded_count += 1
+                                    channel_start_time = time_module.time()
+                                    
+                                except Exception as e:
+                                    download_errors += 1
+                                    if download_errors > 3 and downloaded_count == 0:
+                                        q.put({
+                                            'type': 'error',
+                                            'message': f'  ❌ {site_name} still failing. Giving up.'
+                                        })
+                                        break
+                            
+                            if downloaded_count > 0:
+                                q.put({
+                                    'type': 'success',
+                                    'message': f'  ✓ Retry successful: {site_name} downloaded {downloaded_count} episodes'
+                                })
+                                
+                                # Update results
+                                sync_result_summary = {
+                                    'source': sync_result['source'],
+                                    'source_name': sync_result['source_name'],
+                                    'indexed': sync_result['indexed'],
+                                    'local': sync_result['local'],
+                                    'new': sync_result['new'],
+                                    'downloaded': downloaded_count,
+                                    'download_errors': download_errors,
+                                    'new_items_preview': sync_result.get('new_items_preview', [])
+                                }
+                                
+                                results['details'].append(sync_result_summary)
+                                results['sources_checked'] += 1
+                                results['new_items'] += downloaded_count
+                                results['errors'] += download_errors
+                            else:
+                                q.put({
+                                    'type': 'error',
+                                    'message': f'  ❌ {site_name} retry failed - no episodes downloaded'
+                                })
+                                results['errors'] += 1
+                    
+                except Exception as e:
+                    q.put({
+                        'type': 'error',
+                        'message': f'  ❌ Error retrying {site_name}: {str(e)}'
+                    })
+                    results['errors'] += 1
+        
+        # Calculate duration
+        duration = int(time_module.time() - start_time)
+        results['duration_seconds'] = duration
+        
+        # Log the sync operation
+        sync_manager.log_sync_operation(results)
+        
+        # Send final summary
+        q.put({
+            'type': 'complete',
+            'message': f'✓ Sync complete! Downloaded {results["new_items"]} episodes in {duration}s',
+            'results': results
+        })
+        
+    except Exception as e:
+        q.put({'type': 'error', 'message': f'Sync failed: {str(e)}'})
+    
+    finally:
+        time_module.sleep(2)
+        if session_id in progress_queues:
+            del progress_queues[session_id]
 
 
 if __name__ == '__main__':
