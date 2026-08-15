@@ -25,6 +25,7 @@ class EzraKleinSite(BaseSite):
     REQUIRES_AUTH = False
     ASSET_TYPES = ["transcript", "audio"]
     CATEGORIES = ["podcast"]
+    IMPORT_SOURCE = "nytimes.com/ezra-klein-show"
     
     BASE_URL = "https://www.nytimes.com"
     RSS_URL = "https://feeds.simplecast.com/82FI35Px"
@@ -144,7 +145,7 @@ class EzraKleinSite(BaseSite):
                 with open(txt_path, 'w', encoding='utf-8') as f:
                     f.write(header + transcript_text)
                 
-                metadata = {
+                raw_metadata = {
                     'id': item.id,
                     'title': item.title,
                     'url': item.url,
@@ -152,10 +153,16 @@ class EzraKleinSite(BaseSite):
                     'source': 'The Ezra Klein Show',
                     'asset_type': 'transcript'
                 }
+                normalized = self.build_normalized_metadata(
+                    raw_metadata,
+                    has_diarization=False,
+                    has_segments=False,
+                    segment_count=0,
+                )
                 
                 metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
                 with open(metadata_path, 'w', encoding='utf-8') as f:
-                    json.dump(metadata, f, indent=2)
+                    json.dump(normalized, f, indent=2)
                 
                 return True, "Downloaded transcript"
             
@@ -172,7 +179,7 @@ class EzraKleinSite(BaseSite):
     
     def _download_audio(self, item: ContentItem, output_dir: str,
                         progress_callback=None) -> Tuple[bool, str]:
-        """Download audio file"""
+        """Download audio file with metadata sidecar"""
         try:
             os.makedirs(output_dir, exist_ok=True)
             
@@ -187,6 +194,27 @@ class EzraKleinSite(BaseSite):
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
+            
+            # Write metadata sidecar
+            raw_metadata = {
+                'id': item.id,
+                'title': item.title,
+                'url': item.url,
+                'date': item.date,
+                'description': item.description,
+                'source': 'The Ezra Klein Show',
+                'asset_type': 'audio',
+            }
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+            )
+            
+            metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(normalized, f, indent=2)
             
             return True, f"Downloaded audio ({ext})"
             

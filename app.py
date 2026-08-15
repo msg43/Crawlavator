@@ -26,6 +26,10 @@ from sites.excess_returns import ExcessReturnsSite
 from sites.dwarkesh import DwarkeshSite
 from sites.fareed_zakaria import FareedZakariaSite
 from sites.bigthink import BigThinkSite
+from sites.great_simplification import GreatSimplificationFranklySite
+from sites.econtalk import EconTalkSite
+from sites.on_being import OnBeingSite
+from sites.mindscape import MindscapeSite
 from shared import DownloadManager
 from shared.sync_manager import SyncManager
 import feedparser

@@ -4,6 +4,7 @@ Downloads member content, DDA articles, and Daily Briefings
 """
 
 import os
+import json
 import time
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -21,6 +22,7 @@ class EurodollarSite(BaseSite):
     REQUIRES_AUTH = True
     ASSET_TYPES = ["video", "article", "pdf", "audio", "transcript"]
     CATEGORIES = ["membership", "dda", "daily-briefing"]
+    IMPORT_SOURCE = "eurodollaruniversity.com"
     
     def __init__(self):
         self.auth = EDUAuth()
@@ -74,7 +76,7 @@ class EurodollarSite(BaseSite):
     
     def download_item(self, item: ContentItem, output_dir: str,
                       progress_callback=None) -> Tuple[bool, str]:
-        """Download a single content item"""
+        """Download a single content item with metadata sidecar"""
         # Import downloaders
         from .downloaders import VideoExtractor, ArticleDownloader, PDFDownloader
         
@@ -84,20 +86,22 @@ class EurodollarSite(BaseSite):
         
         try:
             asset_type = item.asset_type
+            success = False
+            message = ""
             
             if asset_type == 'video':
                 output_path = os.path.join(output_dir, 'video.mp4')
-                return video_extractor.download_video(item.url, output_path, progress_callback)
+                success, message = video_extractor.download_video(item.url, output_path, progress_callback)
             
             elif asset_type == 'article':
-                return article_dl.download_article(item.url, output_dir)
+                success, message = article_dl.download_article(item.url, output_dir)
             
             elif asset_type == 'pdf':
                 if item.download_url:
                     output_path = os.path.join(output_dir, f"{self._safe_filename(item.title)}.pdf")
-                    return pdf_dl.download_file(item.download_url, output_path)
+                    success, message = pdf_dl.download_file(item.download_url, output_path)
                 else:
-                    return pdf_dl.download_daily_briefing(item.url, item.title, output_dir)
+                    success, message = pdf_dl.download_daily_briefing(item.url, item.title, output_dir)
             
             elif asset_type == 'audio':
                 if item.download_url:
@@ -107,17 +111,52 @@ class EurodollarSite(BaseSite):
                             ext = e
                             break
                     output_path = os.path.join(output_dir, f"{self._safe_filename(item.title)}{ext}")
-                    return pdf_dl.download_file(item.download_url, output_path)
-                return False, "No download URL for audio"
+                    success, message = pdf_dl.download_file(item.download_url, output_path)
+                else:
+                    return False, "No download URL for audio"
             
             elif asset_type == 'transcript':
-                return article_dl.download_transcript(item.url, item.title, output_dir)
+                success, message = article_dl.download_transcript(item.url, item.title, output_dir)
             
             else:
                 return False, f"Unknown asset type: {asset_type}"
+            
+            # Write metadata sidecar on successful download
+            if success:
+                self._write_metadata_sidecar(item, output_dir)
+            
+            return success, message
                 
         except Exception as e:
             return False, str(e)
+    
+    def _write_metadata_sidecar(self, item: ContentItem, output_dir: str):
+        """Write a normalized metadata.json sidecar for any downloaded item"""
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            safe_title = self._safe_filename(item.title)
+            
+            raw_metadata = {
+                'id': item.id,
+                'title': item.title,
+                'url': item.url,
+                'date': item.date,
+                'description': item.description,
+                'source': 'Eurodollar University',
+                'asset_type': item.asset_type,
+            }
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+            )
+            
+            metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(normalized, f, indent=2)
+        except Exception:
+            pass  # Don't fail the download if metadata write fails
     
     def _safe_filename(self, name: str) -> str:
         import re

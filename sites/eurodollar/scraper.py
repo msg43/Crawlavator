@@ -240,6 +240,10 @@ class EDUScraper:
                     title = re.sub(r'\.(m4a|mp3|pdf)$', '', filename, flags=re.IGNORECASE)
                     title = title.replace('+', ' ').replace('%20', ' ')
                 
+                # Skip Weekly Recaps - DISABLED per user request (ephemeral content)
+                if 'weekly recap' in title.lower() or 'weekly_recap' in title.lower():
+                    continue
+                
                 item = ContentItem(
                     id=self._generate_id("membership", "audio", title),
                     title=title,
@@ -479,12 +483,12 @@ class EDUScraper:
                 if progress_callback:
                     progress_callback(f"Error indexing audio: {str(e)}")
             
-            # Index DDA
-            try:
-                results["dda"] = self.index_dda_articles(page, progress_callback=progress_callback)
-            except Exception as e:
-                if progress_callback:
-                    progress_callback(f"Error indexing DDA: {str(e)}")
+            # Index DDA - DISABLED per user request (ephemeral content)
+            # try:
+            #     results["dda"] = self.index_dda_articles(page, progress_callback=progress_callback)
+            # except Exception as e:
+            #     if progress_callback:
+            #         progress_callback(f"Error indexing DDA: {str(e)}")
             
             # Index Daily Briefings - DISABLED per user request
             # try:

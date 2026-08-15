@@ -25,6 +25,7 @@ class FareedZakariaSite(BaseSite):
     REQUIRES_AUTH = False
     ASSET_TYPES = ["transcript", "audio"]
     CATEGORIES = ["podcast"]
+    IMPORT_SOURCE = "cnn.com/fareed-zakaria"
     
     BASE_URL = "https://www.cnn.com"
     RSS_URL = "http://rss.cnn.com/rss/cnn_gps.rss"
@@ -183,10 +184,21 @@ class FareedZakariaSite(BaseSite):
             with open(txt_path, 'w', encoding='utf-8') as f:
                 f.write(header + transcript_text)
             
-            # Save metadata
+            # Normalize metadata
+            participants = None
+            if metadata.get('guest'):
+                participants = [{"name": metadata['guest'], "role": "guest"}]
+            normalized = self.build_normalized_metadata(
+                metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+                participants=participants,
+            )
+            
             metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(normalized, f, indent=2)
             
             if progress_callback:
                 progress_callback(f"✓ Saved: {safe_title}")
@@ -249,7 +261,7 @@ class FareedZakariaSite(BaseSite):
     
     def _download_audio(self, item: ContentItem, output_dir: str,
                        progress_callback=None) -> Tuple[bool, str]:
-        """Download audio file as fallback"""
+        """Download audio file as fallback with metadata sidecar"""
         if not item.download_url:
             return False, "No audio URL available"
         
@@ -284,6 +296,26 @@ class FareedZakariaSite(BaseSite):
                         if progress_callback and total_size:
                             percent = (downloaded / total_size) * 100
                             progress_callback(f"Downloading: {percent:.0f}%")
+            
+            # Write metadata sidecar
+            raw_metadata = {
+                'id': item.id,
+                'title': item.title,
+                'url': item.url,
+                'date': item.date,
+                'description': item.description,
+                'source': 'Fareed Zakaria GPS',
+                'asset_type': 'audio',
+            }
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+            )
+            metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(normalized, f, indent=2)
             
             if progress_callback:
                 progress_callback(f"✓ Audio saved: {safe_title}")

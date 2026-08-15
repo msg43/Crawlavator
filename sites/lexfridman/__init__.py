@@ -26,6 +26,7 @@ class LexFridmanSite(BaseSite):
     
     BASE_URL = "https://lexfridman.com"
     PODCAST_URL = "https://lexfridman.com/podcast"
+    IMPORT_SOURCE = "lexfridman.com"
     
     def __init__(self):
         self.indexed_content: Dict[str, ContentItem] = {}
@@ -199,9 +200,15 @@ class LexFridmanSite(BaseSite):
             
             soup = BeautifulSoup(response.content, 'lxml')
             
-            # Extract title
+            # Use item.title for filename (page h1 is often just "Lex Fridman")
+            title = item.title
+            
+            # Try to get a better title from the page if available
             title_elem = soup.find('h1')
-            title = title_elem.get_text(strip=True) if title_elem else item.title
+            page_title = title_elem.get_text(strip=True) if title_elem else ""
+            # Only use page title if it's specific (not just "Lex Fridman")
+            if page_title and len(page_title) > 15 and page_title.lower() != "lex fridman":
+                title = page_title
             
             # Extract episode number from title
             episode_num = None
@@ -221,13 +228,14 @@ class LexFridmanSite(BaseSite):
             guest_name = re.sub(r'\s*\|\s*Lex Fridman Podcast.*$', '', guest_name)
             guest_name = re.sub(r'\s*#\d+\s*$', '', guest_name).strip()
             
-            # Create clean filename prefix: "Lex_Fridman_486_Michael_Levin" or "Lex_Fridman_Michael_Levin"
-            safe_guest = re.sub(r'[<>:"/\\|?*]', '', guest_name)
-            safe_guest = re.sub(r'\s+', '_', safe_guest).strip('._')
-            if episode_num:
-                file_prefix = f"Lex_Fridman_{episode_num}_{safe_guest}"
-            else:
-                file_prefix = f"Lex_Fridman_{safe_guest}"
+            # Create clean filename prefix using URL slug for guaranteed uniqueness
+            # Extract slug from URL: "https://lexfridman.com/andrew-huberman-5-transcript" -> "andrew-huberman-5"
+            url_slug = item.url.rstrip('/').split('/')[-1].replace('-transcript', '')
+            safe_slug = re.sub(r'[<>:"/\\|?*]', '', url_slug)
+            safe_slug = re.sub(r'\s+', '_', safe_slug).strip('._')
+            if len(safe_slug) > 100:
+                safe_slug = safe_slug[:100]
+            file_prefix = f"Lex_Fridman_{safe_slug}"
             
             # Create output directory with episode name
             os.makedirs(output_dir, exist_ok=True)
@@ -239,6 +247,25 @@ class LexFridmanSite(BaseSite):
             
             # Parse segments with timestamps
             raw_segments = self._parse_transcript_segments(soup, item.id, title)
+            
+            # Extract full title and episode number from first segment if available
+            # First segment often contains: "Transcript for Annie Jacobsen: ... | Lex Fridman Podcast #420"
+            if raw_segments:
+                first_text = raw_segments[0].get("text", "")
+                ep_match = re.search(r'\|\s*Lex Fridman Podcast\s*#(\d+)', first_text, re.IGNORECASE)
+                if ep_match:
+                    episode_num = ep_match.group(1)  # Prefer segment (more reliable than page)
+                # Extract guest name from "Transcript for X:" pattern (segment is more reliable than page)
+                transcript_for_match = re.search(r'Transcript\s+for\s+([^:|]+)', first_text, re.IGNORECASE)
+                if transcript_for_match:
+                    guest_from_segment = transcript_for_match.group(1).strip()
+                    if guest_from_segment and len(guest_from_segment) > 2:
+                        guest_name = guest_from_segment
+                # Build display title: "Lex Fridman Podcast #420 - Annie Jacobsen"
+                if episode_num and guest_name:
+                    title = f"Lex Fridman Podcast #{episode_num} - {guest_name}"
+                elif guest_name:
+                    title = f"Lex Fridman Podcast - {guest_name}"
             
             # Save plain text transcript
             plain_text = self._segments_to_text(raw_segments, title)
@@ -289,8 +316,13 @@ class LexFridmanSite(BaseSite):
             with open(segments_path, 'w', encoding='utf-8') as f:
                 json.dump(miner_inputs, f, indent=2, ensure_ascii=False)
             
-            # Save metadata
-            metadata = {
+            # Build participants list
+            participants = [{"name": "Lex Fridman", "role": "host"}]
+            if guest_name and guest_name.lower() != 'lex fridman':
+                participants.append({"name": guest_name, "role": "guest"})
+            
+            # Save normalized metadata
+            raw_metadata = {
                 'id': item.id,
                 'episode_id': episode_id,
                 'title': title,
@@ -300,18 +332,19 @@ class LexFridmanSite(BaseSite):
                 'segment_count': len(raw_segments),
                 'source': 'Lex Fridman Podcast',
                 'source_url': 'lexfridman.com',
-                # Knowledge Chipper tracking
-                'source_type': 'crawlavator',
-                'ingestion_method': 'crawlavator_import',
-                'original_source_type': 'podcast_transcript',
-                'provenance': {
-                    'producer_app': 'crawlavator',
-                    'version': '1.0.0',
-                    'import_source': 'lexfridman.com'
-                }
+                'asset_type': 'transcript',
             }
+            
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=True,
+                has_segments=True,
+                segment_count=len(raw_segments),
+                participants=participants,
+            )
+            
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(normalized, f, indent=2)
             
             return True, f"Saved {len(raw_segments)} segments"
             

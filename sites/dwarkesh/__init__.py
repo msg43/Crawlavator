@@ -28,6 +28,7 @@ class DwarkeshSite(BaseSite):
     
     BASE_URL = "https://www.dwarkesh.com"
     RSS_URL = "https://api.substack.com/feed/podcast/69345.rss"
+    IMPORT_SOURCE = "dwarkesh.com"
     
     def __init__(self):
         self.indexed_content: Dict[str, ContentItem] = {}
@@ -177,10 +178,25 @@ class DwarkeshSite(BaseSite):
             with open(txt_path, 'w', encoding='utf-8') as f:
                 f.write(header + transcript_text)
             
+            # Build participants
+            participants = [{"name": "Dwarkesh Patel", "role": "host"}]
+            guest = metadata.get('guest', '')
+            if guest:
+                participants.append({"name": guest, "role": "guest"})
+            
+            # Normalize metadata
+            normalized = self.build_normalized_metadata(
+                metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+                participants=participants,
+            )
+            
             # Save metadata
             metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(normalized, f, indent=2)
             
             if progress_callback:
                 progress_callback(f"✓ Saved: {safe_title}")
@@ -195,9 +211,11 @@ class DwarkeshSite(BaseSite):
     
     def _extract_metadata(self, soup: BeautifulSoup, item: ContentItem) -> Dict[str, Any]:
         """Extract metadata from episode page"""
+        # Use full display title for consistency with Lex/CWT: "Dwarkesh Patel Podcast - {title}"
+        display_title = f"Dwarkesh Patel Podcast - {item.title}" if item.title else item.title
         metadata = {
             'id': item.id,
-            'title': item.title,
+            'title': display_title,
             'url': item.url,
             'date': item.date,
             'source': 'Dwarkesh Patel Podcast',
@@ -242,7 +260,7 @@ class DwarkeshSite(BaseSite):
     
     def _download_audio(self, item: ContentItem, output_dir: str,
                        progress_callback=None) -> Tuple[bool, str]:
-        """Download audio file as fallback"""
+        """Download audio file as fallback with metadata sidecar"""
         if not item.download_url:
             return False, "No audio URL available"
         
@@ -277,6 +295,29 @@ class DwarkeshSite(BaseSite):
                         if progress_callback and total_size:
                             percent = (downloaded / total_size) * 100
                             progress_callback(f"Downloading: {percent:.0f}%")
+            
+            # Write metadata sidecar (display title for consistency with Lex/CWT)
+            display_title = f"Dwarkesh Patel Podcast - {item.title}" if item.title else item.title
+            raw_metadata = {
+                'id': item.id,
+                'title': display_title,
+                'url': item.url,
+                'date': item.date,
+                'description': item.description,
+                'source': 'Dwarkesh Patel Podcast',
+                'asset_type': 'audio',
+            }
+            participants = [{"name": "Dwarkesh Patel", "role": "host"}]
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+                participants=participants,
+            )
+            metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(normalized, f, indent=2)
             
             if progress_callback:
                 progress_callback(f"✓ Audio saved: {safe_title}")

@@ -23,6 +23,7 @@ class PeterZeihanSite(BaseSite):
     REQUIRES_AUTH = False
     ASSET_TYPES = ["audio"]
     CATEGORIES = ["podcast"]
+    IMPORT_SOURCE = "rss.com/zeihan"
     
     RSS_URL = "https://media.rss.com/zeihan/feed.xml"
     
@@ -137,18 +138,27 @@ class PeterZeihanSite(BaseSite):
                     if chunk:
                         f.write(chunk)
             
-            metadata = {
+            raw_metadata = {
                 'id': item.id,
                 'title': item.title,
                 'url': item.url,
                 'date': item.date,
                 'source': 'Peter Zeihan Podcast',
-                'asset_type': 'audio'
+                'asset_type': 'audio',
+                'download_url': item.download_url,
             }
+            
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+                participants=[{"name": "Peter Zeihan", "role": "host"}],
+            )
             
             metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(normalized, f, indent=2)
             
             return True, f"Downloaded audio ({ext})"
             

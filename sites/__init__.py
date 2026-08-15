@@ -6,6 +6,10 @@ Each site module provides scraping/downloading for a specific website.
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
+from datetime import datetime
+
+
+CRAWLAVATOR_VERSION = "1.1.0"
 
 
 @dataclass
@@ -26,6 +30,88 @@ class ContentItem:
         return asdict(self)
 
 
+def normalize_metadata(
+    raw_metadata: Dict[str, Any],
+    *,
+    site_id: str,
+    site_name: str,
+    import_source: str,
+    has_diarization: bool = False,
+    has_segments: bool = False,
+    segment_count: int = 0,
+    participants: Optional[List[Dict[str, str]]] = None,
+    tags: Optional[List[str]] = None,
+    youtube_video_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Normalize any site-specific metadata dict into the canonical crawlavator schema.
+
+    The canonical fields are pulled out; everything else is preserved verbatim
+    inside the ``site_metadata`` sub-object so nothing is ever lost.
+
+    Parameters
+    ----------
+    raw_metadata : dict
+        The original metadata dict produced by the site plugin.
+    site_id : str
+        The SITE_ID of the plugin (e.g. ``"conversationswithtyler"``).
+    site_name : str
+        Human-readable name (e.g. ``"Conversations with Tyler"``).
+    import_source : str
+        Domain or identifier of the upstream source (e.g. ``"conversationswithtyler.com"``).
+    has_diarization : bool
+        Whether the transcript has verified speaker diarization.
+    has_segments : bool
+        Whether a segments.json file was generated.
+    segment_count : int
+        Number of segments (0 if none).
+    participants : list or None
+        List of ``{"name": ..., "role": "host"|"guest"}`` dicts.
+    tags : list or None
+        Topic tags extracted from the episode.
+    youtube_video_id : str or None
+        YouTube video ID if discoverable.
+    """
+
+    # Canonical fields we pull out of raw_metadata (the rest stays in site_metadata)
+    CANONICAL_KEYS = {
+        "id", "title", "date", "url", "source", "source_url",
+        "description", "asset_type", "segment_count",
+    }
+
+    canonical: Dict[str, Any] = {
+        "id": raw_metadata.get("id", ""),
+        "title": raw_metadata.get("title", ""),
+        "date": raw_metadata.get("date", ""),
+        "url": raw_metadata.get("url", ""),
+        "source": raw_metadata.get("source", site_name),
+        "source_url": raw_metadata.get("source_url", ""),
+        "description": raw_metadata.get("description", ""),
+        "participants": participants or [],
+        "tags": tags or [],
+        "asset_type": raw_metadata.get("asset_type", "transcript"),
+        "has_diarization": has_diarization,
+        "has_segments": has_segments,
+        "segment_count": segment_count,
+        "youtube_video_id": youtube_video_id,
+        "provenance": {
+            "producer_app": "crawlavator",
+            "version": CRAWLAVATOR_VERSION,
+            "import_source": import_source,
+            "scrape_date": datetime.utcnow().strftime("%Y-%m-%d"),
+        },
+    }
+
+    # Everything that is NOT a canonical key goes into site_metadata
+    site_metadata: Dict[str, Any] = {}
+    for key, value in raw_metadata.items():
+        if key not in CANONICAL_KEYS and key != "provenance":
+            site_metadata[key] = value
+    canonical["site_metadata"] = site_metadata
+
+    return canonical
+
+
 class BaseSite(ABC):
     """Abstract base class for all site plugins"""
     
@@ -35,6 +121,34 @@ class BaseSite(ABC):
     REQUIRES_AUTH: bool = False
     ASSET_TYPES: List[str] = []
     CATEGORIES: List[str] = []
+    
+    # Override in subclasses that know their import domain
+    IMPORT_SOURCE: str = ""
+    
+    def build_normalized_metadata(
+        self,
+        raw_metadata: Dict[str, Any],
+        *,
+        has_diarization: bool = False,
+        has_segments: bool = False,
+        segment_count: int = 0,
+        participants: Optional[List[Dict[str, str]]] = None,
+        tags: Optional[List[str]] = None,
+        youtube_video_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Convenience wrapper around the module-level normalize_metadata()."""
+        return normalize_metadata(
+            raw_metadata,
+            site_id=self.SITE_ID,
+            site_name=self.SITE_NAME,
+            import_source=self.IMPORT_SOURCE or self.SITE_ID,
+            has_diarization=has_diarization,
+            has_segments=has_segments,
+            segment_count=segment_count,
+            participants=participants,
+            tags=tags,
+            youtube_video_id=youtube_video_id,
+        )
     
     @abstractmethod
     def get_config_fields(self) -> List[Dict[str, Any]]:

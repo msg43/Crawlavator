@@ -26,6 +26,7 @@ class ConversationsWithTylerSite(BaseSite):
     
     BASE_URL = "https://conversationswithtyler.com"
     EPISODES_URL = "https://conversationswithtyler.com/episodes/"
+    IMPORT_SOURCE = "conversationswithtyler.com"
     
     def __init__(self):
         self.indexed_content: Dict[str, ContentItem] = {}
@@ -282,24 +283,47 @@ class ConversationsWithTylerSite(BaseSite):
             with open(segments_path, 'w', encoding='utf-8') as f:
                 json.dump(miner_inputs, f, indent=2, ensure_ascii=False)
             
-            # Save metadata
+            # Build participants list
+            guest_name = metadata.get('guest_name', '')
+            participants = [{"name": "Tyler Cowen", "role": "host"}]
+            if guest_name:
+                participants.append({"name": guest_name, "role": "guest"})
+            
+            # Parse tags from description
+            tags = []
+            desc = metadata.get('description', '')
+            if desc and ',' in desc:
+                raw_tags = [t.strip().rstrip('.') for t in desc.split(',')]
+                tags = [t for t in raw_tags if t and t.lower() not in ('and more', '')]
+            
+            # Build raw metadata for normalization
             metadata['id'] = item.id
             metadata['episode_id'] = episode_id
             metadata['url'] = item.url
             metadata['segment_count'] = len(segments)
             metadata['source'] = 'Conversations with Tyler'
             metadata['source_url'] = 'conversationswithtyler.com'
-            metadata['source_type'] = 'crawlavator'
-            metadata['ingestion_method'] = 'crawlavator_import'
-            metadata['original_source_type'] = 'podcast_transcript'
-            metadata['provenance'] = {
-                'producer_app': 'crawlavator',
-                'version': '1.0.0',
-                'import_source': 'conversationswithtyler.com'
-            }
+            metadata['asset_type'] = 'transcript'
+
+            # Construct display title for consistency: "Conversations with Tyler #N - Guest"
+            guest_name = metadata.get('guest_name', '')
+            if metadata.get('episode_number') and guest_name:
+                metadata['title'] = f"Conversations with Tyler #{metadata['episode_number']} - {guest_name}"
+            elif guest_name:
+                metadata['title'] = f"Conversations with Tyler - {guest_name}"
+            
+            # Normalize to canonical schema
+            normalized = self.build_normalized_metadata(
+                metadata,
+                has_diarization=True,
+                has_segments=True,
+                segment_count=len(segments),
+                participants=participants,
+                tags=tags,
+            )
             
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(normalized, f, indent=2)
             
             return True, f"Saved {len(segments)} segments"
             

@@ -24,6 +24,7 @@ class BigThinkSite(BaseSite):
     REQUIRES_AUTH = False
     ASSET_TYPES = ["transcript"]
     CATEGORIES = ["interview"]
+    IMPORT_SOURCE = "bigthink.com"
     
     BASE_URL = "https://bigthink.com"
     SERIES_URL = "https://bigthink.com/series/the-big-think-interview/"
@@ -210,7 +211,7 @@ class BigThinkSite(BaseSite):
                 f.write(header + transcript_text)
             
             # Save metadata
-            metadata = {
+            raw_metadata = {
                 'id': item.id,
                 'title': item.title,
                 'url': item.url,
@@ -218,10 +219,16 @@ class BigThinkSite(BaseSite):
                 'source': 'Big Think Interviews',
                 'asset_type': 'transcript'
             }
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+            )
             
             metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(normalized, f, indent=2)
             
             if progress_callback:
                 progress_callback(f"✓ Saved: {safe_title}")

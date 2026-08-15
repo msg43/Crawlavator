@@ -10,7 +10,6 @@ import requests
 import feedparser
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
-from urllib.parse import urlparse
 
 from .. import BaseSite, ContentItem, register_site
 
@@ -24,6 +23,7 @@ class PrivateRSSSite(BaseSite):
     REQUIRES_AUTH = False  # RSS URLs are pre-authenticated
     ASSET_TYPES = ["audio", "transcript"]
     CATEGORIES = ["private-podcasts"]
+    IMPORT_SOURCE = "private-rss"
     
     def __init__(self):
         self.indexed_content: Dict[str, ContentItem] = {}
@@ -170,75 +170,54 @@ class PrivateRSSSite(BaseSite):
     
     def download_item(self, item: ContentItem, output_dir: str,
                       progress_callback=None) -> Tuple[bool, str]:
-        """Download an episode (audio file)"""
-        
+        """Write a metadata file for GTTP ingestion — no audio download.
+
+        The audio download_url is preserved in site_metadata so the GTTP
+        transcription pipeline can fetch and transcribe the episode.
+        """
         if not item.download_url:
-            return False, "No audio URL available"
-        
+            return False, "No audio URL in feed entry"
+
         try:
-            # Create output directory
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # Determine file extension from URL or content type
-            ext = '.mp3'
-            url_path = urlparse(item.download_url).path
-            if url_path.endswith('.m4a'):
-                ext = '.m4a'
-            elif url_path.endswith('.mp3'):
-                ext = '.mp3'
-            elif url_path.endswith('.wav'):
-                ext = '.wav'
-            
-            # Create safe filename
+            feed_dir = os.path.join(output_dir, self._safe_dirname(item.subcategory or 'Private RSS'))
+            os.makedirs(feed_dir, exist_ok=True)
+
             safe_title = self._safe_filename(item.title)
-            output_path = os.path.join(output_dir, f"{safe_title}{ext}")
-            
-            if progress_callback:
-                progress_callback(f"Downloading {item.title}...")
-            
-            # Download audio file
-            response = self.session.get(item.download_url, stream=True, timeout=60)
-            response.raise_for_status()
-            
-            # Check content type for actual format
-            content_type = response.headers.get('content-type', '')
-            if 'm4a' in content_type or 'mp4' in content_type:
-                ext = '.m4a'
-                output_path = os.path.join(output_dir, f"{safe_title}{ext}")
-            
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            
-            with open(output_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if progress_callback and total_size > 0:
-                            progress = int((downloaded / total_size) * 100)
-                            progress_callback(f"Downloading {item.title}: {progress}%")
-            
-            # Save metadata
-            metadata = {
+            metadata_path = os.path.join(feed_dir, f"{safe_title}_metadata.json")
+
+            if os.path.exists(metadata_path):
+                return True, f"Already complete: {safe_title}_metadata.json"
+
+            raw_metadata = {
                 'id': item.id,
                 'title': item.title,
                 'url': item.url,
-                'download_url': item.download_url,
+                'download_url': item.download_url,  # picked up by GTTP bulk-import
                 'date': item.date,
                 'description': item.description,
-                'source': 'Private RSS Feed',
+                'source': item.subcategory or 'Private RSS Feed',
+                'source_url': '',
+                'asset_type': 'audio',
                 'category': item.category,
-                'subcategory': item.subcategory
+                'subcategory': item.subcategory,
             }
-            
-            metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
+
+            import_src = self._slugify(item.subcategory) if item.subcategory else 'private-rss'
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+            )
+            normalized['provenance']['import_source'] = import_src
+
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
-            
-            return True, f"Downloaded audio file ({ext})"
-            
+                json.dump(normalized, f, indent=2)
+
+            return True, f"Metadata saved: {safe_title}_metadata.json"
+
         except Exception as e:
-            return False, f"Download error: {str(e)}"
+            return False, f"Metadata error: {str(e)}"
     
     def _slugify(self, text: str) -> str:
         """Convert text to slug format"""
@@ -248,6 +227,12 @@ class PrivateRSSSite(BaseSite):
         text = text.strip('_')
         return text[:50] if text else 'unknown'
     
+    def _safe_dirname(self, name: str) -> str:
+        """Create safe directory name (preserves spaces to match PODCASTS folder style)"""
+        safe = re.sub(r'[<>:"/\\|?*]', '', name)
+        safe = safe.strip()
+        return safe or 'Unknown Feed'
+
     def _safe_filename(self, name: str) -> str:
         """Create safe filename"""
         safe = re.sub(r'[<>:"/\\|?*]', '', name)

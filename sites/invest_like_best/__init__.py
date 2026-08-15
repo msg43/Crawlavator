@@ -26,6 +26,7 @@ class InvestLikeBestSite(BaseSite):
     REQUIRES_AUTH = False
     ASSET_TYPES = ["transcript", "audio"]
     CATEGORIES = ["podcast"]
+    IMPORT_SOURCE = "joincolossus.com"
     
     BASE_URL = "https://www.joincolossus.com"
     RSS_URL = "https://investlikethebest.libsyn.com/rss"
@@ -197,7 +198,7 @@ class InvestLikeBestSite(BaseSite):
                 f.write(header + transcript_text)
             
             # Save metadata
-            metadata = {
+            raw_metadata = {
                 'id': item.id,
                 'title': item.title,
                 'url': item.url,
@@ -207,9 +208,15 @@ class InvestLikeBestSite(BaseSite):
                 'source_url': 'joincolossus.com',
                 'asset_type': 'transcript'
             }
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+            )
             
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(normalized, f, indent=2)
             
             return True, "Downloaded transcript"
             
@@ -221,7 +228,7 @@ class InvestLikeBestSite(BaseSite):
     
     def _download_audio(self, item: ContentItem, output_dir: str,
                         progress_callback=None) -> Tuple[bool, str]:
-        """Fallback: download audio file"""
+        """Fallback: download audio file with metadata sidecar"""
         try:
             if progress_callback:
                 progress_callback(f"Downloading audio: {item.title}")
@@ -243,6 +250,28 @@ class InvestLikeBestSite(BaseSite):
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
+            
+            # Write metadata sidecar
+            raw_metadata = {
+                'id': item.id,
+                'title': item.title,
+                'url': item.url,
+                'date': item.date,
+                'description': item.description,
+                'source': 'Invest Like the Best',
+                'source_url': 'joincolossus.com',
+                'asset_type': 'audio',
+            }
+            normalized = self.build_normalized_metadata(
+                raw_metadata,
+                has_diarization=False,
+                has_segments=False,
+                segment_count=0,
+            )
+            
+            metadata_path = os.path.join(output_dir, f"{safe_title}_metadata.json")
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(normalized, f, indent=2)
             
             return True, f"Downloaded audio ({ext})"
             
